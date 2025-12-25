@@ -364,6 +364,9 @@ class RAGNodes:
 3. 给出具体的健康建议
 4. 使用Markdown格式，结构清晰"""
 
+                    # 使用invoke()而不是stream()
+                    # 原因：LangGraph的astream会自动处理流式输出
+                    # 在节点内部使用stream()会导致所有chunk都带langgraph_node metadata
                     final_response = self.llm.invoke(final_prompt)
 
                     # 构建完整的来源信息（支持多工具）

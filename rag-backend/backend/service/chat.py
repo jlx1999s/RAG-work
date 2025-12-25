@@ -319,6 +319,10 @@ async def chat_stream(chat_request: ChatRequest) -> AsyncGenerator[Dict[str, Any
                         
                         latest_message = node_output['messages'][-1]  # 获取最新的一条消息
                         message_content = latest_message.content if hasattr(latest_message, 'content') else str(latest_message)
+                        
+                        # 不再记录完整消息到日志（避免重复）
+                        # logger.info(f"（流式输出）消息: {message_content}")
+                        
                         save_chat_message(
                             conversation_id=session_id,
                             role="assistant",
@@ -364,11 +368,21 @@ async def chat_stream(chat_request: ChatRequest) -> AsyncGenerator[Dict[str, Any
                         "content": "\n"
                     }
                     if chunkmessage.content:
-                        logger.info(f"（流式输出）消息: {chunkmessage.content}")
+                        # 企业级实践：所有chunk都发送给前端，由前端控制显示逻辑
+                        # 添加is_final标记，帮助前端判断是否为最终消息
+                        is_final = (
+                            metadata and 
+                            'langgraph_node' in metadata and 
+                            len(chunkmessage.content) > 500
+                        )
+                        
+                        logger.info(f"（流式输出）消息: {chunkmessage.content[:50]}... (length={len(chunkmessage.content)}, is_final={is_final})")
+                        
                         yield {
                             "type": "token",
                             "session_id": session_id,
-                            "content": chunkmessage.content
+                            "content": chunkmessage.content,
+                            "is_final": is_final  # 标记是否为最终完整消息
                         }
 
             # 流式输出完成后,发送结束节点通知
