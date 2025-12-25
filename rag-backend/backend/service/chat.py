@@ -307,8 +307,15 @@ async def chat_stream(chat_request: ChatRequest) -> AsyncGenerator[Dict[str, Any
                         content = f"节点名称为{node_name}，图检索到的文档为{graphdoc}"
                     elif node_name == "generate_answer" or node_name == "direct_answer":
                         content = f"节点名称为{node_name}，回答完毕"
+                        
+                        # 提取来源信息
+                        sources = node_output.get('answer_sources', [])
+                        
                         # 存储messages类型的消息到数据库
-                        extra_data = {"node_name": node_name}
+                        extra_data = {
+                            "node_name": node_name,
+                            "sources": sources  # 将来源信息也存储到数据库
+                        }
                         
                         latest_message = node_output['messages'][-1]  # 获取最新的一条消息
                         message_content = latest_message.content if hasattr(latest_message, 'content') else str(latest_message)
@@ -319,6 +326,14 @@ async def chat_stream(chat_request: ChatRequest) -> AsyncGenerator[Dict[str, Any
                             content=message_content,
                             extra_data=extra_data
                         )
+                        
+                        # 发送来源信息到前端
+                        if sources:
+                            yield {
+                                "type": "sources",
+                                "session_id": session_id,
+                                "sources": sources
+                            }
                     else:
                         content = f"节点名称为{node_name}"
                     

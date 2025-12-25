@@ -343,6 +343,11 @@ class RAGNodes:
                     metadata=doc.metadata
                 )
                 converted_docs.append(retrieved_doc)
+                # 调试日志：查看每个文档的metadata
+                self.logger.info(f"检索文档 metadata: document_name={doc.metadata.get('document_name')}, "
+                               f"chunk_index={doc.metadata.get('chunk_index')}, "
+                               f"content_length={len(doc.page_content)}, "
+                               f"pk={doc.metadata.get('pk')}")
 
             # 根据pk值进行去重处理
             unique_docs = []
@@ -494,11 +499,34 @@ class RAGNodes:
                 #self.logger.info(f"{answer_result}")
 
                 
+                # 提取文档来源信息
+                sources = []
+                for i, doc in enumerate(retrieved_docs):
+                    retrieval_source = doc.metadata.get("source", "vector")
+                    
+                    # 根据检索类型智能截取内容
+                    if retrieval_source == "lightrag_graph":
+                        # 图检索：内容可能很长，截取更多用于显示
+                        content_preview = doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content
+                    else:
+                        # 向量检索：通常是分块内容，保留完整片段
+                        content_preview = doc.page_content[:400] + "..." if len(doc.page_content) > 400 else doc.page_content
+                    
+                    source_info = {
+                        "index": i + 1,
+                        "document_name": doc.metadata.get("document_name", f"文档{i+1}"),
+                        "content": content_preview,
+                        "chunk_index": doc.metadata.get("chunk_index"),
+                        "retrieval_mode": retrieval_source,
+                        "content_length": len(doc.page_content)  # 添加原始长度信息
+                    }
+                    sources.append(source_info)
+                
                 # 更新状态
                 state["final_answer"] = answer_content
-                state["answer_sources"] = []  # 不再从结构化输出中提取来源
+                state["answer_sources"] = sources
 
-                self.logger.info("答案生成成功")
+                self.logger.info(f"答案生成成功，包含 {len(sources)} 个来源")
 
                 # 添加AI回复消息到messages
                 state["messages"] = [answer_result]
