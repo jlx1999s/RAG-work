@@ -229,13 +229,33 @@ class MilvusStorage:
             if not self.vector_store:
                 raise ValueError("向量存储未初始化")
             
-            # 使用LangChain Milvus删除功能
-            # 注意：LangChain Milvus可能不支持按元数据过滤删除，这里提供基本实现
+            # 使用 Milvus 原生客户端按元数据删除
+            client = self.vector_store.client
+            
+            # 检查 collection 是否存在
+            if not client.has_collection(target_collection):
+                return {
+                    "status": "warning",
+                    "document_name": document_name,
+                    "message": f"Collection '{target_collection}' 不存在",
+                    "collection_name": target_collection
+                }
+            
+            # 构造删除表达式：匹配 document_name 元数据
+            expr = f'document_name == "{document_name}"'
+            
+            # 执行删除
+            result = client.delete(
+                collection_name=target_collection,
+                expr=expr
+            )
+            
             return {
-                "status": "error",
+                "status": "success",
                 "document_name": document_name,
-                "error": "LangChain Milvus不支持按文档名删除，请使用其他方式",
-                "collection_name": target_collection
+                "message": f"成功删除文档 '{document_name}' 的所有 chunks",
+                "collection_name": target_collection,
+                "delete_count": result.delete_count if hasattr(result, 'delete_count') else "unknown"
             }
             
         except Exception as e:

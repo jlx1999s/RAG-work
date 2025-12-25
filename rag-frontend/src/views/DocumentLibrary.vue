@@ -105,9 +105,9 @@
             class="p-3 rounded-lg cursor-pointer transition-colors group border"
             :class="{
               'bg-amber-50 border-amber-200':
-                selectedLibrary?.id === library.id,
+                selectedLibrary && selectedLibrary.id === library.id,
               'hover:bg-gray-50 border-gray-100':
-                selectedLibrary?.id !== library.id,
+                !selectedLibrary || selectedLibrary.id !== library.id,
             }"
           >
             <div class="flex items-start justify-between">
@@ -121,7 +121,7 @@
                 <div
                   class="flex items-center mt-2 text-xs text-gray-400 font-light"
                 >
-                  <span>{{ library.documents?.length || 0 }} 个文档</span>
+                  <span>{{ (library.documents && library.documents.length) || 0 }} 个文档</span>
                   <span class="mx-1">•</span>
                   <span>{{ formatTime(library.updated_at) }}</span>
                 </div>
@@ -833,7 +833,7 @@ const deleteLibrary = async (libraryId) => {
 
     if (response.status === 200) {
       ElMessage.success("文档库删除成功");
-      if (selectedLibrary.value?.id === libraryId) {
+      if (selectedLibrary.value && selectedLibrary.value.id === libraryId) {
         selectedLibrary.value = null;
       }
       await loadLibraries();

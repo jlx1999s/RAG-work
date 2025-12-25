@@ -120,7 +120,13 @@ class LightRAGStorage:
             graph_storage=graph_storage,
             kv_storage=kv_storage,
             doc_status_storage=doc_status_storage,
-            vector_storage=vector_storage
+            vector_storage=vector_storage,
+            # 注意：language 参数在某些版本的 LightRAG 中不支持，已移除
+            # 如果需要中文实体，请确保 LLM 配置正确
+            addon_params={
+                "entity_extract_max_gleaning": 1,  # 减少实体提取轮数（降低噪声）
+                "max_token_for_text_unit": 4000,  # 限制每个处理单元的token数
+            }
         )
 
         # 初始化存储
@@ -229,3 +235,32 @@ class LightRAGStorage:
 
         except Exception as e:
             logger.error(f"删除workspace '{self.workspace}' 时出错: {str(e)}")
+
+    async def get_graph_stats(self) -> Dict[str, int]:
+        """获取图谱统计信息
+        
+        Returns:
+            Dict: 包含实体数、关系数等统计信息
+        """
+        try:
+            if self.rag is None:
+                await self.initialize()
+            
+            # 通过 Neo4j 查询获取统计信息
+            graph = self.rag.chunk_entity_relation_graph
+            
+            # 这里需要根据 Neo4j 的实际 API 调整
+            # 以下是示例逻辑
+            stats = {
+                "entity_count": 0,
+                "relation_count": 0,
+                "workspace": self.workspace
+            }
+            
+            # TODO: 实现实际的统计查询
+            logger.info(f"图谱统计: {stats}")
+            return stats
+            
+        except Exception as e:
+            logger.error(f"获取图谱统计失败: {str(e)}")
+            return {"error": str(e)}

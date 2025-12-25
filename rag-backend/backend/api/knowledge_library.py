@@ -93,6 +93,13 @@ async def get_document_content(document_id: int, current_user: int = Depends(get
     return await library_service.get_document_content(document_id, current_user)
 
 
+@router.get("/processing/queue-status")
+async def get_queue_status(current_user: int = Depends(get_current_user)):
+    """获取文档处理队列状态"""
+    logger.info(f"用户 {current_user} 请求获取队列状态")
+    return await library_service.get_processing_queue_status()
+
+
 @router.post("/upload-url")
 async def get_upload_url(
     request: UploadDocRequest,
