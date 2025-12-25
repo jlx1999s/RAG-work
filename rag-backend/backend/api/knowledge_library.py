@@ -114,6 +114,13 @@ async def get_document_content(document_id: int, current_user: int = Depends(get
     return await library_service.get_document_content(document_id, current_user)
 
 
+@router.get("/documents/{document_id}/chunks")
+async def get_document_chunks(document_id: int, current_user: int = Depends(get_current_user)):
+    """获取文档的分块信息"""
+    logger.info(f"用户 {current_user} 请求获取文档分块信息: {document_id}")
+    return await library_service.get_document_chunks(document_id, current_user)
+
+
 @router.get("/processing/queue-status")
 async def get_queue_status(current_user: int = Depends(get_current_user)):
     """获取文档处理队列状态"""

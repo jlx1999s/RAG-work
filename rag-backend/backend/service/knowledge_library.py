@@ -877,3 +877,107 @@ async def get_document_content(document_id: int, user_id: str) -> Response:
     except Exception as e:
         logger.error(f"获取文档内容失败: {str(e)}")
         return Response.error(f"获取文档内容失败: {str(e)}")
+
+
+async def get_document_chunks(document_id: int, user_id: str) -> Response:
+    """获取文档的分块信息（从 Milvus 查询）"""
+    try:
+        from pymilvus import MilvusClient
+        
+        db_factory = DatabaseFactory()
+        session = db_factory.create_session()
+        
+        try:
+            # 查询文档并验证权限
+            document = (
+                session.query(KnowledgeDocument)
+                .join(KnowledgeLibrary)
+                .filter(
+                    KnowledgeDocument.id == document_id,
+                    KnowledgeLibrary.user_id == user_id,
+                    KnowledgeLibrary.is_active == True,
+                )
+                .first()
+            )
+            
+            if not document:
+                return Response.error("文档不存在或无权限访问")
+            
+            library = document.library
+            collection_id = library.collection_id
+            
+            if not collection_id:
+                return Response.error("知识库未初始化")
+            
+            # 连接 Milvus
+            milvus_uri = os.getenv('MILVUS_URI', 'http://localhost:19530')
+            temp_client = MilvusClient(uri=milvus_uri)
+            
+            # 查询分块信息 - 尝试多个collection名称
+            chunks_collection = f"{collection_id}_chunks"
+            
+            # 检查collection是否存在
+            all_collections = temp_client.list_collections()
+            
+            # 如果标准名称不存在，尝试不带后缀的
+            if chunks_collection not in all_collections:
+                if collection_id in all_collections:
+                    chunks_collection = collection_id
+                    logger.info(f"Collection {collection_id}_chunks 不存在，使用 {collection_id}")
+                else:
+                    return Response.error(f"Collection 不存在: {chunks_collection} 和 {collection_id} 都未找到")
+            
+            try:
+                logger.info(f"开始查询 collection: {chunks_collection}, 文档名: {document.name}")
+                
+                # 查询分块数据
+                results = temp_client.query(
+                    collection_name=chunks_collection,
+                    filter=f'document_name == "{document.name}"',
+                    output_fields=['document_name', 'chunk_index', 'chunk_size', 'text'],
+                    limit=1000
+                )
+                
+                logger.info(f"查询结果数量: {len(results)}")
+                
+                if not results:
+                    return Response.success({
+                        "document_id": document_id,
+                        "document_name": document.name,
+                        "total_chunks": 0,
+                        "chunks": [],
+                        "message": "文档未向量化或未找到分块"
+                    })
+                
+                # 按 chunk_index 排序
+                sorted_results = sorted(results, key=lambda x: x.get('chunk_index', 0))
+                
+                # 构造返回数据
+                chunks = []
+                for r in sorted_results:
+                    chunk_text = r.get('text', '')  # 新版使用 'text' 字段
+                    
+                    chunks.append({
+                        "chunk_index": r.get('chunk_index', 0),
+                        "chunk_size": r.get('chunk_size', len(chunk_text)),
+                        "text": chunk_text,
+                        "preview": chunk_text[:200] + "..." if len(chunk_text) > 200 else chunk_text
+                    })
+                
+                return Response.success({
+                    "document_id": document_id,
+                    "document_name": document.name,
+                    "total_chunks": len(chunks),
+                    "chunks": chunks
+                })
+                
+            except Exception as e:
+                logger.error(f"查询 Milvus 失败: {str(e)}")
+                return Response.error(f"查询分块信息失败: {str(e)}")
+            
+        finally:
+            session.close()
+            
+    except Exception as e:
+        logger.error(f"获取文档分块信息失败: {str(e)}")
+        return Response.error(f"获取文档分块信息失败: {str(e)}")
