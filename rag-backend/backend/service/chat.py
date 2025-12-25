@@ -305,7 +305,7 @@ async def chat_stream(chat_request: ChatRequest) -> AsyncGenerator[Dict[str, Any
                     elif node_name == "graph_db_retrieval":
                         graphdoc = "\n".join([f"{i+1}. {doc}" for i, doc in enumerate(node_output['graph_db_results'])])
                         content = f"节点名称为{node_name}，图检索到的文档为{graphdoc}"
-                    elif node_name == "generate_answer" or node_name == "direct_answer":
+                    elif node_name == "generate_answer" or node_name == "direct_answer" or node_name == "tool_calling":
                         content = f"节点名称为{node_name}，回答完毕"
                         
                         # 提取来源信息

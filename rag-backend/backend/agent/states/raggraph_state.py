@@ -29,6 +29,8 @@ class RAGGraphState(TypedDict, total=False):
     need_retrieval: bool               # 是否需要检索
     need_retrieval_reason: Optional[str] = ""    # 需要检索的理由
     retrieval_mode_reason: Optional[str] = ""    # 检索模式的理由
+    need_tool: bool                    # 是否需要调用工具
+    selected_tool: Optional[str] = ""        # 选中的工具名称
     # ==================== 问题处理 ====================
     original_question: str             # 原始问题
     subquestions: List[str]            # 扩展的子问题列表
@@ -42,6 +44,9 @@ class RAGGraphState(TypedDict, total=False):
     # ==================== 答案生成 ====================
     final_answer: str                  # 最终答案
     answer_sources: List[str]          # 答案来源列表
+    
+    # ==================== 错误处理 ====================
+    error: Optional[Dict[str, Any]] = None  # 结构化错误信息
 
 
 def create_initial_rag_state(

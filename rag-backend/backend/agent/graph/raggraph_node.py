@@ -11,9 +11,19 @@ from ..prompts.raggraph_prompt import (
     RetrievalTypeDecision
 )
 from langmem import create_manage_memory_tool, create_search_memory_tool
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from ...config.log import get_logger
+from backend.agent.tools.exceptions import (
+    ToolCallException,
+    ToolExecutionError,
+    ToolNotFoundError,
+    ToolExecutionTimeoutError
+)
+from backend.agent.tools.audit import get_audit_logger
 import asyncio
+import json
+import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
 class RAGNodes:
     """RAG图节点实现类
@@ -21,7 +31,7 @@ class RAGNodes:
     包含所有RAG图的节点实现和路由逻辑
     """
 
-    def __init__(self, llm=None, embedding_model=None, milvus_storage=None, memory_store=None, checkpointer=None, lightrag_storage=None):
+    def __init__(self, llm=None, embedding_model=None, milvus_storage=None, memory_store=None, checkpointer=None, lightrag_storage=None, tools=None):
         """初始化RAG节点
 
         Args:
@@ -31,6 +41,7 @@ class RAGNodes:
             memory_store: 记忆存储实例
             checkpointer: 检查点存储实例
             lightrag_storage: LightRAG存储实例
+            tools: 可用工具列表（如风险评估工具）
         """
         self.llm = llm
         self.embedding_model = embedding_model
@@ -38,7 +49,39 @@ class RAGNodes:
         self.memory_store = memory_store
         self.checkpointer = checkpointer
         self.lightrag_storage = lightrag_storage
+        self.tools = tools or []  # 工具列表
         self.logger = get_logger(__name__)
+        self.tool_timeout = 30.0  # 工具执行超时（30秒）
+        self.executor = ThreadPoolExecutor(max_workers=5)  # 线程池用于超时控制
+    
+    def _execute_tool_with_timeout(self, tool, tool_args, timeout=None):
+        """带超时控制的工具执行
+        
+        Args:
+            tool: 工具实例
+            tool_args: 工具参数
+            timeout: 超时时间（秒），默认使用 self.tool_timeout
+        
+        Returns:
+            工具执行结果
+        
+        Raises:
+            ToolExecutionTimeoutError: 工具执行超时
+        """
+        timeout = timeout or self.tool_timeout
+        
+        try:
+            # 使用线程池执行工具，并设置超时
+            future = self.executor.submit(tool.invoke, tool_args)
+            result = future.result(timeout=timeout)
+            return result
+        except FutureTimeoutError:
+            # 超时异常
+            raise ToolExecutionTimeoutError(
+                tool_name=tool.name,
+                timeout=timeout,
+                details=f"工具 '{tool.name}' 执行超过 {timeout} 秒"
+            )
 
     # ==================== 节点实现 ====================
 
@@ -57,6 +100,331 @@ class RAGNodes:
         """
         self.logger.info("=" * 50)
         self.logger.info("[RAG Graph] 节点: START - 开始处理")
+
+        return state
+
+    def check_tool_needed_node(self, state: RAGGraphState, runtime: Runtime[RAGContext]) -> RAGGraphState:
+        """判断是否需要工具调用节点
+
+        使用LLM智能判断用户问题是否需要调用工具（如风险评估）。
+        只有当用户提供了足够的参数时才会调用工具。
+
+        Args:
+            state: 当前状态
+            runtime: 运行时上下文
+
+        Returns:
+            更新后的状态
+        """
+        self.logger.info("=" * 50)
+        self.logger.info("[RAG Graph] 节点: CHECK_TOOL_NEEDED - 判断是否需要工具")
+
+        # 如果没有工具，直接跳过
+        if not self.tools:
+            self.logger.info("无可用工具，跳过工具检查")
+            state["need_tool"] = False
+            return state
+
+        # 获取用户问题
+        messages = state.get("messages", [])
+        if not messages:
+            state["need_tool"] = False
+            return state
+
+        user_question = messages[-1].content if hasattr(messages[-1], 'content') else str(messages[-1])
+        self.logger.info(f"分析问题: {user_question}")
+
+        try:
+            # 构建工具描述
+            tool_descriptions = []
+            for tool in self.tools:
+                tool_descriptions.append(f"- {tool.name}: {tool.description}")
+            tools_text = "\n".join(tool_descriptions)
+
+            # 使用LLM判断是否需要工具
+            prompt = f"""你是一个智能助手，需要判断用户问题是否需要调用工具。
+
+可用工具：
+{tools_text}
+
+用户问题：{user_question}
+
+判断规则：
+1. 用户是否明确请求进行风险评估、计算等需要工具的任务
+2. 对于糖尿病风险评估：
+   - **必需参数**：年龄(age)、BMI
+   - **可选参数**：腰围、血压、家族史、体育活动、吸烟、饮食质量（这些有默认值）
+3. 对于高血压风险评估：
+   - **必需参数**：年龄、收缩压、舒张压
+   - **可选参数**：家族史、吸烟、盐分摄入（这些有默认值）
+4. 只要用户提供了必需参数，就应该调用工具（可选参数会使用默认值）
+
+只有同时满足以下条件才返回需要工具：
+- 用户明确需要工具功能（如"风险评估"）
+- 提供了该工具的**必需参数**
+
+请用JSON格式回答：
+{{
+  "need_tool": true/false,
+  "tool_name": "工具名称或null",
+  "reason": "判断理由",
+  "missing_params": ["缺少的必需参数列表，如果有"]
+}}"""
+
+            response = self.llm.invoke(prompt)
+            response_text = response.content
+
+            # 解析JSON响应
+            import re
+            json_match = re.search(r'\{[^}]+\}', response_text, re.DOTALL)
+            if json_match:
+                decision = json.loads(json_match.group())
+                need_tool = decision.get("need_tool", False)
+                tool_name = decision.get("tool_name")
+                reason = decision.get("reason", "")
+
+                state["need_tool"] = need_tool
+                state["selected_tool"] = tool_name
+                self.logger.info(f"LLM判断: need_tool={need_tool}, tool={tool_name}, reason={reason}")
+            else:
+                # 解析失败，默认不使用工具
+                state["need_tool"] = False
+                self.logger.warning("无法解析LLM响应，默认不使用工具")
+
+        except Exception as e:
+            self.logger.error(f"工具判断失败: {e}")
+            state["need_tool"] = False
+
+        return state
+
+    def tool_calling_node(self, state: RAGGraphState, runtime: Runtime[RAGContext]) -> RAGGraphState:
+        """工具调用节点
+
+        执行工具调用，获取结果并格式化为友好的回答。
+
+        Args:
+            state: 当前状态
+            runtime: 运行时上下文
+
+        Returns:
+            更新后的状态
+        """
+        self.logger.info("="*50)
+        self.logger.info("[RAG Graph] 节点: TOOL_CALLING - 执行工具调用")
+
+        messages = state.get("messages", [])
+        user_question = messages[-1].content if messages and hasattr(messages[-1], 'content') else ""
+        selected_tool = state.get("selected_tool")
+
+        self.logger.info(f"用户问题: {user_question}")
+        self.logger.info(f"选中的工具: {selected_tool}")
+
+        try:
+            # 绑定工具到LLM
+            llm_with_tools = self.llm.bind_tools(self.tools)
+
+            # 构建更明确的提示词，强制LLM调用工具
+            tool_names = [tool.name for tool in self.tools]
+            prompt = f"""用户请求进行风险评估。
+
+用户问题：{user_question}
+
+你必须使用以下工具之一来回答：{tool_names}
+
+请直接调用工具，从用户问题中提取参数。
+
+参数提取指导：
+
+对于 diabetes_risk_assessment（糖尿病风险评估）：
+- age：提取年龄数字
+- bmi：提取BMI数值（可能是小数）
+- blood_pressure：如果提到“血压偏高”或“高血压”，设置 blood_pressure="偏高"
+- family_history：如果提到“有家族史”或类似表述，设置 family_history=True
+
+对于 hypertension_risk_assessment（高血压风险评估）：
+- age：提取年龄数字
+- systolic_bp：提取收缩压（高压）数字，单位mmHg
+- diastolic_bp：提取舒张压（低压）数字，单位mmHg
+  例如：“血压140/90” → systolic_bp=140, diastolic_bp=90
+- family_history：如果提到高血压家族史，设置 family_history=True
+- smoking：如果提到吸烟，设置 smoking=True
+
+必须调用工具，不能只是返回文本回答！"""
+
+            # 调用LLM（带工具）
+            self.logger.info("调用LLM，期待工具调用...")
+            response = llm_with_tools.invoke(prompt)
+
+            # 检查是否有工具调用
+            if hasattr(response, 'tool_calls') and response.tool_calls:
+                self.logger.info(f"LLM请求调用 {len(response.tool_calls)} 个工具")
+
+                # 执行工具调用
+                tool_results = []
+                audit_logger = get_audit_logger()
+                
+                for tool_call in response.tool_calls:
+                    tool_name = tool_call['name']
+                    tool_args = tool_call['args']
+                    self.logger.info(f"调用工具: {tool_name}, 参数: {tool_args}")
+                    
+                    # 记录开始时间
+                    start_time = time.time()
+                    tool_result = None
+                    tool_error = None
+
+                    # 查找并执行工具
+                    tool_found = False
+                    for tool in self.tools:
+                        if tool.name == tool_name:
+                            tool_found = True
+                            try:
+                                # 使用带超时的执行方法
+                                tool_result = self._execute_tool_with_timeout(tool, tool_args)
+                                tool_results.append(tool_result)
+                                self.logger.info(f"工具执行成功: {tool_name}, 结果: {tool_result}")
+                            except ToolExecutionTimeoutError as timeout_error:
+                                # 超时异常
+                                self.logger.error(f"工具执行超时: {timeout_error.to_dict()}")
+                                tool_error = timeout_error.to_dict()
+                                
+                                state["error"] = timeout_error.to_dict()
+                                state["final_answer"] = timeout_error.message
+                                state["messages"] = [AIMessage(content=timeout_error.message)]
+                            except Exception as tool_exec_error:
+                                # 其他执行错误
+                                error = ToolExecutionError(
+                                    tool_name=tool_name,
+                                    error_message=str(tool_exec_error),
+                                    details=f"{type(tool_exec_error).__name__}: {tool_exec_error}"
+                                )
+                                self.logger.error(f"工具执行失败: {error.to_dict()}")
+                                tool_error = error.to_dict()
+                                
+                                state["error"] = error.to_dict()
+                                state["final_answer"] = error.message
+                                state["messages"] = [AIMessage(content=error.message)]
+                            finally:
+                                # 计算执行时间
+                                execution_time_ms = (time.time() - start_time) * 1000
+                                
+                                # 审计日志
+                                audit_logger.log_tool_call(
+                                    conversation_id=state.get("session_id", "unknown"),
+                                    user_id=state.get("user_id", "unknown"),
+                                    tool_name=tool_name,
+                                    tool_args=tool_args,
+                                    result=tool_result,
+                                    error=tool_error,
+                                    execution_time_ms=execution_time_ms
+                                )
+                                
+                                # 如果有错误，直接返回
+                                if tool_error:
+                                    return state
+                            break
+                    
+                    # 工具未找到
+                    if not tool_found:
+                        available_tools = [t.name for t in self.tools]
+                        error = ToolNotFoundError(
+                            tool_name=tool_name,
+                            available_tools=available_tools
+                        )
+                        self.logger.error(f"工具未找到: {error.to_dict()}")
+                        
+                        # 审计日志
+                        execution_time_ms = (time.time() - start_time) * 1000
+                        audit_logger.log_tool_call(
+                            conversation_id=state.get("session_id", "unknown"),
+                            user_id=state.get("user_id", "unknown"),
+                            tool_name=tool_name,
+                            tool_args=tool_args,
+                            error=error.to_dict(),
+                            execution_time_ms=execution_time_ms
+                        )
+                        
+                        state["error"] = error.to_dict()
+                        state["final_answer"] = error.message
+                        state["messages"] = [AIMessage(content=error.message)]
+                        return state
+
+                if tool_results:
+                    # 使用LLM将工具结果转化为友好的回答
+                    final_prompt = f"""基于以下工具执行结果，请给用户一个清晰、专业、友好的回答。
+
+用户问题：{user_question}
+
+工具结果：
+{json.dumps(tool_results, ensure_ascii=False, indent=2)}
+
+请：
+1. 用通俗易懂的语言解释结果
+2. 突出显示关键信息（风险等级、评分等）
+3. 给出具体的健康建议
+4. 使用Markdown格式，结构清晰"""
+
+                    final_response = self.llm.invoke(final_prompt)
+
+                    # 构建完整的来源信息（支持多工具）
+                    sources = []
+                    for i, (tool_call, result) in enumerate(zip(response.tool_calls, tool_results)):
+                        tool_name = tool_call['name']
+                        sources.append({
+                            "index": i + 1,
+                            "tool_name": tool_name,
+                            "document_name": f"工具: {tool_name}",
+                            "content": f"风险等级: {result.get('risk_level', 'N/A')}, 评分: {result.get('risk_score', 'N/A')}",
+                            "retrieval_mode": "tool",
+                            "metadata": {
+                                "tool_args": tool_call['args'],
+                                "risk_level": result.get('risk_level'),
+                                "risk_score": result.get('risk_score'),
+                                "risk_factors": result.get('risk_factors', []),
+                                "recommendations": result.get('recommendations', [])
+                            }
+                        })
+
+                    state["final_answer"] = final_response.content
+                    state["answer_sources"] = sources
+                    state["messages"] = [AIMessage(content=final_response.content)]
+                    self.logger.info("✅ 工具调用成功，生成回答")
+                    return state
+            
+            # 如果LLM没有调用工具，记录详细信息
+            self.logger.warning("⚠️ LLM没有调用工具！")
+            self.logger.warning(f"LLM响应: {response}")
+            self.logger.warning(f"LLM响应类型: {type(response)}")
+            self.logger.warning(f"hasattr tool_calls: {hasattr(response, 'tool_calls')}")
+            if hasattr(response, 'tool_calls'):
+                self.logger.warning(f"tool_calls 内容: {response.tool_calls}")
+            
+            # 没有工具调用，返回提示
+            state["final_answer"] = "抱歉，我无法从您的问题中提取足够的参数来进行评估。请提供更详细的信息。"
+            state["messages"] = [AIMessage(content=state["final_answer"])]
+
+        except ToolCallException as e:
+            # 已经是结构化异常，直接使用
+            self.logger.error(f"工具调用异常: {e.to_dict()}")
+            state["error"] = e.to_dict()
+            state["final_answer"] = e.message
+            state["messages"] = [AIMessage(content=e.message)]
+        except Exception as e:
+            # 未预期的异常，包装为通用错误
+            import traceback
+            self.logger.error(f"工具调用失败: {e}")
+            self.logger.error(traceback.format_exc())
+            
+            from backend.agent.tools.exceptions import ToolCallErrorCode
+            error = ToolCallException(
+                code=ToolCallErrorCode.UNKNOWN_ERROR,
+                message="抱歉，工具调用时遇到未知问题",
+                details=traceback.format_exc(),
+                metadata={"original_error": str(e)}
+            )
+            state["error"] = error.to_dict()
+            state["final_answer"] = error.message
+            state["messages"] = [AIMessage(content=error.message)]
 
         return state
 
@@ -452,8 +820,7 @@ class RAGNodes:
     def generate_answer_node(self, state: RAGGraphState, runtime: Runtime[RAGContext]) -> RAGGraphState:
         """生成答案节点
 
-        基于检索到的文档和用户问题，调用LLM生成最终答案，
-        使用结构化输出获得详细的答案信息，并将结果添加到messages中。
+        基于检索到的文档和用户问题，调用LLM生成最终答案。
 
         Args:
             state: 当前状态
@@ -477,7 +844,6 @@ class RAGNodes:
             documents_text = ""
             if retrieved_docs:
                 for i, doc in enumerate(retrieved_docs):
-                    # 获取文档来源信息
                     source = doc.metadata.get("document_name", f"文档{i+1}")
                     documents_text += f"\n[文档 {i+1} - {source}]:\n{doc.page_content}\n"
             else:
@@ -491,56 +857,39 @@ class RAGNodes:
                 doc_count=len(retrieved_docs)
             )
 
-            # 直接调用LLM生成答案
-            try:
-                answer_result = self.llm.invoke(prompt)
-                answer_content = answer_result.content
+            # 调用LLM生成答案
+            answer_result = self.llm.invoke(prompt)
+            answer_content = answer_result.content
+            
+            # 提取文档来源信息
+            sources = []
+            for i, doc in enumerate(retrieved_docs):
+                retrieval_source = doc.metadata.get("source", "vector")
                 
-                #self.logger.info(f"{answer_result}")
-
+                if retrieval_source == "lightrag_graph":
+                    content_preview = doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content
+                else:
+                    content_preview = doc.page_content[:400] + "..." if len(doc.page_content) > 400 else doc.page_content
                 
-                # 提取文档来源信息
-                sources = []
-                for i, doc in enumerate(retrieved_docs):
-                    retrieval_source = doc.metadata.get("source", "vector")
-                    
-                    # 根据检索类型智能截取内容
-                    if retrieval_source == "lightrag_graph":
-                        # 图检索：内容可能很长，截取更多用于显示
-                        content_preview = doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content
-                    else:
-                        # 向量检索：通常是分块内容，保留完整片段
-                        content_preview = doc.page_content[:400] + "..." if len(doc.page_content) > 400 else doc.page_content
-                    
-                    source_info = {
-                        "index": i + 1,
-                        "document_name": doc.metadata.get("document_name", f"文档{i+1}"),
-                        "content": content_preview,
-                        "chunk_index": doc.metadata.get("chunk_index"),
-                        "retrieval_mode": retrieval_source,
-                        "content_length": len(doc.page_content)  # 添加原始长度信息
-                    }
-                    sources.append(source_info)
-                
-                # 更新状态
-                state["final_answer"] = answer_content
-                state["answer_sources"] = sources
+                source_info = {
+                    "index": i + 1,
+                    "document_name": doc.metadata.get("document_name", f"文档{i+1}"),
+                    "content": content_preview,
+                    "chunk_index": doc.metadata.get("chunk_index"),
+                    "retrieval_mode": retrieval_source,
+                    "content_length": len(doc.page_content)
+                }
+                sources.append(source_info)
+            
+            # 更新状态
+            state["final_answer"] = answer_content
+            state["answer_sources"] = sources
+            state["messages"] = [answer_result]
 
-                self.logger.info(f"答案生成成功，包含 {len(sources)} 个来源")
-
-                # 添加AI回复消息到messages
-                state["messages"] = [answer_result]
-
-            except Exception as parse_error:
-                self.logger.error(f"结构化输出调用失败: {parse_error}")
-                # 解析失败时生成基础答案
-                fallback_answer = "抱歉，基于当前检索到的信息，我无法提供完整的答案。请尝试重新提问或提供更多上下文信息。"
-                state["final_answer"] = fallback_answer
-                state["answer_sources"] = []
+            self.logger.info(f"答案生成成功，包含 {len(sources)} 个来源")
 
         except Exception as e:
             self.logger.error(f"答案生成失败: {e}")
-            # 出错时生成错误答案
             error_answer = "抱歉，在生成答案时遇到了技术问题。请稍后重试。"
             state["final_answer"] = error_answer
             state["answer_sources"] = []
@@ -552,82 +901,70 @@ class RAGNodes:
 
         对于不需要检索的常规问题，直接使用LLM生成答案，
         并结合当前会话内的对话历史（短期记忆）进行回答。
-        适用于一般性问题、闲聊、简单计算等场景。
 
         Args:
             state: 当前状态
             runtime: 运行时上下文
 
         Returns:
-            更新后的状态，包含生成的答案
+            更新后的状态
         """
         self.logger.info("=" * 50)
         self.logger.info("[RAG Graph] 节点: DIRECT_ANSWER - 直接回答")
 
-        # 获取当前会话的所有消息
         all_messages = state.get("messages", [])
         if not all_messages:
             self.logger.warning("没有可用的消息")
             state["final_answer"] = "抱歉，我没有收到您的问题。"
             return state
 
-        # 最新一条用户消息
         latest_message = all_messages[-1]
         user_question = latest_message.content if hasattr(latest_message, "content") else str(latest_message)
         self.logger.info(f"用户问题: {user_question}")
 
-        # 构造对话历史文本（短期记忆），最多保留最近20条
+        # 构建对话历史
         try:
             trimmed_messages = all_messages[-20:] if len(all_messages) > 20 else all_messages
             history_lines = []
             for msg in trimmed_messages:
-                # LangChain 消息通常有 type 和 content
                 role = getattr(msg, "type", "user")
                 content = msg.content if hasattr(msg, "content") else str(msg)
                 if not content:
                     continue
-                if role in ["human", "user"]:
-                    prefix = "用户"
-                elif role in ["ai", "assistant"]:
-                    prefix = "助手"
-                else:
-                    prefix = "系统"
+                prefix = "用户" if role in ["human", "user"] else "助手" if role in ["ai", "assistant"] else "系统"
                 history_lines.append(f"{prefix}: {content}")
 
             conversation_history = "\n".join(history_lines)
             if not conversation_history.strip():
                 conversation_history = "（当前是本次对话的第一条消息）"
-        except Exception as e:
-            self.logger.error(f"构造对话历史失败: {e}")
-            conversation_history = "（对话历史加载失败，仅根据当前问题回答）"
 
+        except Exception as e:
+            self.logger.warning(f"构建对话历史失败: {e}")
+            conversation_history = "（无法获取对话历史）"
+
+        # 生成回答
         try:
-            # 获取直接回答的提示词
             prompt_template = RAGGraphPrompts.get_direct_answer_prompt()
             prompt = prompt_template.format(
-                conversation_history=conversation_history,
-                question=user_question
+                question=user_question,
+                conversation_history=conversation_history
             )
+            response = self.llm.invoke(prompt)
+            answer = response.content
 
-            # 直接调用LLM生成答案
-            self.logger.info("调用LLM生成答案...")
-            answer_result = self.llm.invoke(prompt)
-            answer_content = answer_result.content
-
-            self.logger.info("答案生成成功")
-
-            # 更新状态
-            state["final_answer"] = answer_content
-            state["messages"] = [answer_result]
+            state["final_answer"] = answer
+            state["messages"] = [AIMessage(content=answer)]
+            self.logger.info("直接回答生成成功")
 
         except Exception as e:
             self.logger.error(f"直接回答失败: {e}")
-            error_answer = "抱歉，在生成答案时遇到了问题。请稍后重试。"
+            error_answer = "抱歉，我在处理您的问题时遇到了问题。请稍后重试。"
             state["final_answer"] = error_answer
+            state["messages"] = [AIMessage(content=error_answer)]
 
         return state
 
-    # ==================== 记忆功能版本（已注释） ====================
+    # ====================记忆功能版本（已注释） ====================
     """
     def direct_answer_node_with_memory(self, state: RAGGraphState, runtime: Runtime[RAGContext]) -> RAGGraphState:
         \"\"\"直接回答节点，集成langmem记忆管理（已弃用）
@@ -729,11 +1066,30 @@ class RAGNodes:
         self.logger.info(f"[RAG Graph] 路由检查: need_retrieval = {need_retrieval}")
 
         if need_retrieval:
-            self.logger.info("路由决策: 需要检索 -> expand_subquestions")
+            self.logger.info("路由决策: 需要检索 -> check_tool_needed")
             return "need_retrieval"
         else:
-            self.logger.info("路由决策: 无需检索 -> direct_answer")
+            self.logger.info("路由决策: 无需检索 -> check_tool_needed")
             return "no_retrieval"
+
+    def route_tool_needed(self, state: RAGGraphState) -> str:
+        """路由：是否需要工具
+
+        Args:
+            state: 当前状态
+
+        Returns:
+            路由目标
+        """
+        need_tool = state.get("need_tool", False)
+        self.logger.info(f"[RAG Graph] 路由检查: need_tool = {need_tool}")
+
+        if need_tool:
+            self.logger.info("路由决策: 需要工具 -> tool_calling")
+            return "need_tool"
+        else:
+            self.logger.info("路由决策: 不需要工具 -> check_retrieval_needed")
+            return "no_tool"
 
     def route_question_type(self, state: RAGGraphState) -> str:
         """路由：检索类型分类

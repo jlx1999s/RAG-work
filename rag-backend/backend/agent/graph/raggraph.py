@@ -15,9 +15,18 @@ from ...rag.storage.lightrag_storage import LightRAGStorage
 class RAGGraph:
     """RAG图计算框架
 
-    基于流程图设计的RAG系统，包含以下节点：
+    基于流程图设计的RAG系统，采用ReAct Agent架构，节点执行顺序：
+    
+    核心流程（优先级递减）：
+    1. 工具调用优先：check_tool_needed -> tool_calling（如风险评估）
+    2. 文档检索次之：check_retrieval_needed -> expand_subquestions -> 检索 -> 生成答案
+    3. 直接回答兜底：direct_answer（如闲聊、问候）
+    
+    完整节点列表：
     - start: 开始节点
-    - check_retrieval_needed: 判断是否需要检索
+    - check_tool_needed: 判断是否需要调用工具（优先判断）
+    - tool_calling: 执行工具调用（如风险评估工具）
+    - check_retrieval_needed: 判断是否需要检索（工具判断后）
     - direct_answer: 直接回答常规问题（不需要检索）
     - expand_subquestions: 由原始问题扩展子问题
     - classify_question_type: 判断检索类型（向量检索/图检索）
@@ -46,6 +55,10 @@ class RAGGraph:
 
         # 初始化PostgreSQL Store用于langmem记忆持久化
         self.memory_store = None
+
+        # 初始化工具列表
+        self.tools = []
+        self._init_tools()
 
         # 初始化MilvusStorage
         self.milvus_storage = None
@@ -132,10 +145,25 @@ class RAGGraph:
             milvus_storage=self.milvus_storage,
             memory_store=self.memory_store,
             checkpointer=self.checkpointer,
-            lightrag_storage=self.lightrag_storage
+            lightrag_storage=self.lightrag_storage,
+            tools=self.tools  # 传入工具列表
         )
 
         self._build_graph()
+
+    def _init_tools(self) -> None:
+        """初始化可用工具"""
+        try:
+            from ..tools.risk_assessment import diabetes_risk_assessment, hypertension_risk_assessment
+            
+            self.tools = [
+                diabetes_risk_assessment,
+                hypertension_risk_assessment
+            ]
+            print(f"[RAG Graph] 已加载 {len(self.tools)} 个工具: {[tool.name for tool in self.tools]}")
+        except Exception as e:
+            print(f"[RAG Graph] 工具初始化失败: {e}")
+            self.tools = []
 
     def _build_graph(self) -> None:
         """构建状态图"""
@@ -148,6 +176,8 @@ class RAGGraph:
         # 添加节点
         workflow.add_node("start", self.nodes.start_node)
         workflow.add_node("check_retrieval_needed", self.nodes.check_retrieval_needed_node)
+        workflow.add_node("check_tool_needed", self.nodes.check_tool_needed_node)  # 新增
+        workflow.add_node("tool_calling", self.nodes.tool_calling_node)  # 新增
         workflow.add_node("direct_answer", self.nodes.direct_answer_node)
         workflow.add_node("expand_subquestions", self.nodes.expand_subquestions_node)
         workflow.add_node("classify_question_type", self.nodes.classify_question_type_node)
@@ -166,8 +196,21 @@ class RAGGraph:
 
     def _add_edges(self, workflow: StateGraph) -> None:
         """添加图的边和条件边"""
-        # 开始 -> 是否需要检索
-        workflow.add_edge("start", "check_retrieval_needed")
+        # 开始 -> 优先判断是否需要工具
+        workflow.add_edge("start", "check_tool_needed")
+
+        # 是否需要工具的条件边
+        workflow.add_conditional_edges(
+            "check_tool_needed",
+            self.nodes.route_tool_needed,
+            {
+                "need_tool": "tool_calling",
+                "no_tool": "check_retrieval_needed"  # 不需要工具才判断是否需要检索
+            }
+        )
+
+        # 工具调用 -> 结束
+        workflow.add_edge("tool_calling", END)
 
         # 是否需要检索的条件边
         workflow.add_conditional_edges(
