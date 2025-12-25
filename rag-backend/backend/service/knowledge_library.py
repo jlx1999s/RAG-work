@@ -4,6 +4,7 @@
 知识库服务层
 提供知识库相关的业务逻辑处理
 """
+import os
 import uuid
 import time
 import requests
@@ -26,6 +27,12 @@ _processing_semaphore = asyncio.Semaphore(3)
 _processing_queue = asyncio.Queue()
 _queue_processor_started = False
 
+# 跟踪正在处理的文档（document_id -> {"name": str, "mode": str, "start_time": float}）
+_processing_documents = {}
+
+# 跟踪排队中的任务（按加入顺序）
+_queued_tasks = []  # [{"document_id": int, "document_name": str, "mode": str, "enqueue_time": float}]
+
 
 async def _queue_processor():
     """后台任务队列处理器，确保有序处理文档"""
@@ -42,18 +49,41 @@ async def _queue_processor():
             collection_id = task_data['collection_id']
             document_name = task_data['document_name']
             document_id = task_data.get('document_id')  # 获取文档ID
+            mode = task_data.get('mode', 'all')  # 获取处理模式，默认为 all
             
-            logger.info(f"队列处理器开始处理文档: {document_name}, 队列剩余: {_processing_queue.qsize()}")
+            # 从排队列表中移除
+            if document_id:
+                _queued_tasks[:] = [t for t in _queued_tasks if t['document_id'] != document_id]
+            
+            logger.info(f"队列处理器开始处理文档: {document_name}, 模式: {mode}, 队列剩余: {_processing_queue.qsize()}")
             
             # 使用信号量控制并发
             async with _processing_semaphore:
-                await _process_uploaded_file(url, collection_id, document_name, document_id)
+                # 记录开始处理
+                if document_id:
+                    _processing_documents[document_id] = {
+                        "name": document_name,
+                        "mode": mode,
+                        "start_time": time.time()
+                    }
+                
+                try:
+                    await _process_uploaded_file(url, collection_id, document_name, document_id, mode)
+                finally:
+                    # 移除处理记录
+                    if document_id and document_id in _processing_documents:
+                        del _processing_documents[document_id]
             
             # 标记任务完成
             _processing_queue.task_done()
             
         except Exception as e:
             logger.error(f"队列处理器异常: {str(e)}")
+            if document_id and document_id in _processing_documents:
+                del _processing_documents[document_id]
+            # 从排队列表中移除
+            if document_id:
+                _queued_tasks[:] = [t for t in _queued_tasks if t['document_id'] != document_id]
             _processing_queue.task_done()
 
 
@@ -289,23 +319,8 @@ async def add_document(request: AddDocumentRequest, user_id: str) -> Response:
             
             logger.info(f"成功添加文档到知识库 {library.title}: {document.name}")
             
-            # 如果是文件类型且有 URL，触发向量化和图谱构建
-            if request.type == "file" and request.url:
-                logger.info(f"检测到文件上传，加入处理队列: {request.url}")
-                
-                # 确保队列处理器已启动
-                await _ensure_queue_processor()
-                
-                # 将任务加入队列（不阻塞）
-                await _processing_queue.put({
-                    'url': request.url,
-                    'collection_id': library.collection_id,
-                    'document_name': request.name,
-                    'document_id': document.id  # 传递文档ID
-                })
-                
-                queue_size = _processing_queue.qsize()
-                logger.info(f"文档已加入处理队列，当前队列长度: {queue_size}")
+            # 注意：不再自动触发处理，用户需要点击“开始解析”按钮
+            # 这样可以确保 OSS 上传完成后再处理，避免 404 错误
             
             return Response.success(document.to_dict())
         finally:
@@ -403,11 +418,137 @@ async def delete_document(document_id: int, user_id: str) -> Response:
         return Response.error(f"删除文档失败: {str(e)}")
 
 
+async def start_document_processing(document_id: int, user_id: str) -> Response:
+    """开始解析文档（用户点击解析按钮后调用）
+    
+    Args:
+        document_id: 文档ID
+        user_id: 用户ID
+        
+    Returns:
+        Response: 处理结果
+    """
+    return await _start_processing(document_id, user_id, mode="all")
+
+
+async def start_document_vectorize(document_id: int, user_id: str) -> Response:
+    """仅向量化文档（不做图谱）
+    
+    Args:
+        document_id: 文档ID
+        user_id: 用户ID
+        
+    Returns:
+        Response: 处理结果
+    """
+    return await _start_processing(document_id, user_id, mode="vectorize")
+
+
+async def start_document_graph(document_id: int, user_id: str) -> Response:
+    """仅图谱化文档（不做向量）
+    
+    Args:
+        document_id: 文档ID
+        user_id: 用户ID
+        
+    Returns:
+        Response: 处理结果
+    """
+    return await _start_processing(document_id, user_id, mode="graph")
+
+
+async def _start_processing(document_id: int, user_id: str, mode: str = "all") -> Response:
+    """通用的文档处理启动函数
+    
+    Args:
+        document_id: 文档ID
+        user_id: 用户ID
+        mode: 处理模式 - all/vectorize/graph
+        
+    Returns:
+        Response: 处理结果
+    """
+    try:
+        db_factory = DatabaseFactory()
+        session = db_factory.create_session()
+        
+        try:
+            # 查询文档并验证权限
+            document = session.query(KnowledgeDocument).join(KnowledgeLibrary).filter(
+                KnowledgeDocument.id == document_id,
+                KnowledgeLibrary.user_id == user_id,
+                KnowledgeLibrary.is_active == True
+            ).first()
+            
+            if not document:
+                return Response.error("文档不存在或无权限访问")
+            
+            if document.is_processed:
+                return Response.error("文档已经解析过，无需重复处理")
+            
+            if not document.url:
+                return Response.error("文档缺少 URL，无法处理")
+            
+            library = document.library
+            
+            logger.info(f"用户 {user_id} 请求开始解析文档: {document.name}")
+            
+            # 确保队列处理器已启动
+            await _ensure_queue_processor()
+            
+            # 将任务加入处理队列
+            task_info = {
+                'url': document.url,
+                'collection_id': library.collection_id,
+                'document_name': document.name,
+                'document_id': document.id,
+                'mode': mode  # 传递处理模式
+            }
+            await _processing_queue.put(task_info)
+            
+            # 记录到排队列表
+            _queued_tasks.append({
+                "document_id": document.id,
+                "document_name": document.name,
+                "mode": mode,
+                "enqueue_time": time.time()
+            })
+            
+            queue_size = _processing_queue.qsize()
+            available_slots = _processing_semaphore._value
+            max_concurrent = 3
+            processing_count = max_concurrent - available_slots
+            
+            logger.info(f"文档已加入处理队列，当前队列长度: {queue_size}，正在处理: {processing_count} 个")
+            
+            # 根据模式返回不同消息
+            mode_text = "解析" if mode == "all" else ("向量化" if mode == "vectorize" else "图谱化")
+            
+            if processing_count >= max_concurrent:
+                message = f"文档已加入{mode_text}队列（排队位置: {queue_size}，当前有 {processing_count} 个文档正在处理，请耐心等待）"
+            else:
+                message = f"文档已加入{mode_text}队列（排队位置: {queue_size}）"
+            
+            return Response.success({
+                "message": message,
+                "queue_position": queue_size,
+                "processing_count": processing_count,
+                "max_concurrent": max_concurrent
+            })
+            
+        finally:
+            session.close()
+            
+    except Exception as e:
+        logger.error(f"开始文档解析失败: {str(e)}")
+        return Response.error(f"开始解析失败: {str(e)}")
+
+
 async def get_processing_queue_status() -> Response:
     """获取文档处理队列状态
     
     Returns:
-        Response: 包含队列长度、并发数等信息
+        Response: 包含队列长度、并发数、正在处理和排队中的文档列表等信息
     """
     try:
         queue_size = _processing_queue.qsize()
@@ -415,15 +556,42 @@ async def get_processing_queue_status() -> Response:
         max_concurrent = 3  # 与 _processing_semaphore 初始化值一致
         processing_count = max_concurrent - available_slots
         
+        # 构建正在处理的文档列表
+        processing_list = []
+        for doc_id, doc_info in _processing_documents.items():
+            elapsed_time = int(time.time() - doc_info['start_time'])
+            processing_list.append({
+                "document_id": doc_id,
+                "document_name": doc_info['name'],
+                "mode": doc_info['mode'],
+                "elapsed_seconds": elapsed_time,
+                "status": "processing"  # 正在处理
+            })
+        
+        # 构建排队中的文档列表
+        queued_list = []
+        for idx, task in enumerate(_queued_tasks, 1):
+            wait_time = int(time.time() - task['enqueue_time'])
+            queued_list.append({
+                "document_id": task['document_id'],
+                "document_name": task['document_name'],
+                "mode": task['mode'],
+                "wait_seconds": wait_time,
+                "queue_position": idx,  # 排队位置
+                "status": "queued"  # 排队中
+            })
+        
         status = {
             "queue_size": queue_size,  # 排队中的任务数
-            "processing_count": processing_count,  # 正在处理的任务数
+            "processing_count": len(processing_list),  # 正在处理的任务数（修正：使用实际数量）
             "max_concurrent": max_concurrent,  # 最大并发数
             "available_slots": available_slots,  # 剩余可用槽位
-            "processor_running": _queue_processor_started  # 处理器是否运行
+            "processor_running": _queue_processor_started,  # 处理器是否运行
+            "processing_documents": processing_list,  # 正在处理的文档列表
+            "queued_documents": queued_list  # 排队中的文档列表
         }
         
-        logger.info(f"队列状态: {status}")
+        logger.info(f"队列状态: 处理中={len(processing_list)}, 排队={len(queued_list)}")
         return Response.success(status)
         
     except Exception as e:
@@ -431,90 +599,80 @@ async def get_processing_queue_status() -> Response:
         return Response.error(f"获取队列状态失败: {str(e)}")
 
 
-async def _process_uploaded_file(url: str, collection_id: str, document_name: str, document_id: int = None):
+async def _process_uploaded_file(url: str, collection_id: str, document_name: str, document_id: int = None, mode: str = "all"):
     """处理上传的文件（向量化和图谱构建）
+    
+    使用独立的 DocumentProcessor，完全解耦爬虫逻辑
     
     Args:
         url: 文件的 OSS URL
         collection_id: 知识库的 collection_id
         document_name: 文档名称
         document_id: 文档ID（用于更新状态）
+        mode: 处理模式 - all/vectorize/graph
     """
     try:
-        from backend.rag.storage.milvus_storage import MilvusStorage
-        from backend.rag.storage.lightrag_storage import LightRAGStorage
-        from backend.config.embedding import get_embedding_model
-        from backend.service.crawl import handle_md, init_crawl_status, update_crawl_status
-        from backend.service.crawl import CRAWL_STATUS_PROCESSING, CRAWL_STATUS_COMPLETED, CRAWL_STATUS_ERROR
+        from backend.service.document_processor import process_uploaded_document
+        from urllib.parse import urlparse
         
-        logger.info(f"开始处理上传文件: {document_name}, URL: {url}")
+        logger.info(f"开始处理上传文件: {document_name}, URL: {url}, 模式: {mode}")
         
-        # 初始化存储
-        milvus_storage = MilvusStorage(
-            embedding_function=get_embedding_model(),
-            collection_name=collection_id,
-        )
-        lightrag_storage = LightRAGStorage(workspace=collection_id)
+        # 从 URL 中提取 OSS bucket 和 key
+        oss_bucket = os.getenv("OSS_BUCKET_FILE", os.getenv("OSS_BUCKET_NAME", "ragagent-file"))
         
-        # 初始化爬虫状态（复用爬虫状态机制）
-        await init_crawl_status(collection_id)
+        # 从 URL 解析 key
+        if "aliyuncs.com/" in url:
+            oss_key = url.split("aliyuncs.com/")[-1].split("?")[0]
+        elif oss_bucket in url:
+            oss_key = url.split(f"{oss_bucket}/")[-1].split("?")[0]
+        else:
+            # Fallback: 假设 key 是 URL path 部分
+            parsed = urlparse(url)
+            oss_key = parsed.path.lstrip('/')
+        
+        logger.info(f"解析 OSS 参数: bucket={oss_bucket}, key={oss_key}")
         
         # 检测文件类型
-        file_like_suffixes = (".md", ".markdown", ".txt", ".pdf", ".doc", ".docx")
+        file_type = "md"
         url_lower = url.lower()
-        
-        # 对于 md/txt 文件，直接下载并处理
-        if url_lower.endswith((".md", ".markdown", ".txt")):
-            try:
-                logger.info(f"检测到文本文件，直接下载并处理: {url}")
-                resp = requests.get(url, timeout=30)
-                resp.raise_for_status()
-                content = resp.text
-                
-                if not content or not content.strip():
-                    msg = f"文件内容为空，跳过处理: {url}"
-                    logger.warning(msg)
-                    await update_crawl_status(collection_id, CRAWL_STATUS_ERROR, msg)
-                    return
-                
-                # 调用 handle_md 进行向量化和图谱构建
-                await handle_md(
-                    md_content=content,
-                    type="light_and_milvus",
-                    param=[milvus_storage, lightrag_storage],
-                    collection_id=collection_id,
-                )
-                
-                await update_crawl_status(collection_id, CRAWL_STATUS_COMPLETED)
-                
-                # 标记文档为已处理
-                if document_id:
-                    await _mark_document_processed(document_id)
-                
-                logger.info(f"文件处理完成: {document_name}")
-                
-            except Exception as e:
-                msg = f"处理文件时发生错误: {str(e)}"
-                logger.error(msg)
-                await update_crawl_status(collection_id, CRAWL_STATUS_ERROR, msg)
-        
-        # 对于其他类型文件（PDF, DOC等），暂时记录警告
-        elif url_lower.endswith((".pdf", ".doc", ".docx")):
-            msg = f"暂不支持自动处理 {url_lower.split('.')[-1].upper()} 格式文件，请使用网站链接方式添加"
+        if url_lower.endswith((".md", ".markdown")):
+            file_type = "md"
+        elif url_lower.endswith(".txt"):
+            file_type = "txt"
+        elif url_lower.endswith(".pdf"):
+            msg = f"暂不支持自动处理 PDF 格式文件，请使用网站链接方式添加"
             logger.warning(msg)
-            await update_crawl_status(collection_id, CRAWL_STATUS_ERROR, msg)
-        else:
-            msg = f"未知文件类型: {url}"
+            return
+        elif url_lower.endswith((".doc", ".docx")):
+            msg = f"暂不支持自动处理 Word 格式文件，请使用网站链接方式添加"
             logger.warning(msg)
-            await update_crawl_status(collection_id, CRAWL_STATUS_ERROR, msg)
-            
+            return
+        
+        # 使用新的文档处理器，根据模式调用
+        vectorize_only = (mode == "vectorize")
+        graph_only = (mode == "graph")
+        
+        result = await process_uploaded_document(
+            document_name=document_name,
+            oss_bucket=oss_bucket,
+            oss_key=oss_key,
+            collection_id=collection_id,
+            file_type=file_type,
+            vectorize_only=vectorize_only,
+            graph_only=graph_only
+        )
+        
+        # 标记文档处理状态
+        if document_id:
+            await _mark_document_processed(document_id, mode)
+        
+        logger.info(f"文件处理完成: {document_name}, 结果: {result}")
+        
     except Exception as e:
-        logger.error(f"处理上传文件异常: {str(e)}")
-        try:
-            from backend.service.crawl import update_crawl_status, CRAWL_STATUS_ERROR
-            await update_crawl_status(collection_id, CRAWL_STATUS_ERROR, str(e))
-        except:
-            pass
+        logger.error(f"处理上传文件异常: {document_name}, 错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        # 不再向上抛出异常，避免影响队列处理
 
 
 async def _cleanup_library_data(collection_id: str, library_title: str):
@@ -605,11 +763,12 @@ async def _cleanup_document_data(collection_id: str, document_name: str, documen
         logger.error(f"清理文档数据异常: {str(e)}")
 
 
-async def _mark_document_processed(document_id: int):
-    """标记文档为已处理
+async def _mark_document_processed(document_id: int, mode: str = "all"):
+    """标记文档处理状态
     
     Args:
         document_id: 文档ID
+        mode: 处理模式 - all/vectorize/graph
     """
     try:
         db_factory = DatabaseFactory()
@@ -621,9 +780,19 @@ async def _mark_document_processed(document_id: int):
             ).first()
             
             if document:
-                document.is_processed = True
+                if mode == "vectorize":
+                    document.is_vectorized = True
+                    logger.info(f"文档 {document_id} 已标记为已向量化")
+                elif mode == "graph":
+                    document.is_graphed = True
+                    logger.info(f"文档 {document_id} 已标记为已图谱化")
+                else:  # mode == "all"
+                    document.is_vectorized = True
+                    document.is_graphed = True
+                    document.is_processed = True
+                    logger.info(f"文档 {document_id} 已标记为已处理（向量化+图谱化）")
+                
                 session.commit()
-                logger.info(f"文档 {document_id} 已标记为已处理")
             else:
                 logger.warning(f"未找到文档 {document_id}")
                 

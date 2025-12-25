@@ -11,7 +11,8 @@ from backend.agent.contexts.raggraph_context import RAGContext
 from backend.param.chat import ChatRequest
 from backend.config.log import get_logger
 from backend.service import conversation as conversation_service
-from backend.service.chat_history import save_chat_message
+from backend.service.chat_history import save_chat_message, get_chat_messages
+from backend.agent.prompts.raggraph_prompt import RAGGraphPrompts
 
 logger = get_logger(__name__)
 
@@ -171,11 +172,91 @@ async def chat_stream(chat_request: ChatRequest) -> AsyncGenerator[Dict[str, Any
             system_prompt=chat_request.system_prompt or "你是一个专业的RAG助手，能够基于检索到的信息提供准确的回答。"
         )
         
-        # 准备输入数据
+        # ===== 构造带长短期记忆的对话历史（会话内） =====
+        history_messages: List[Dict[str, str]] = []
+        conversation_summary: Optional[str] = None
+        try:
+            # 从数据库获取该会话的历史消息（已按时间升序）
+            history_records = get_chat_messages(session_id)
+
+            dialog_records: List[Dict[str, Any]] = []
+            summary_records: List[Dict[str, Any]] = []
+            for record in history_records:
+                role = (record.get("role") or "").lower()
+                msg_type = (record.get("type") or "").lower()
+                content_text = (record.get("content") or "").strip()
+                if not content_text:
+                    continue
+                if msg_type == "messages" and role in ["user", "assistant"]:
+                    dialog_records.append(record)
+                elif msg_type == "summary":
+                    summary_records.append(record)
+
+            # 已存在的摘要（仅在当前 conversation_id 内生效）
+            if summary_records:
+                conversation_summary = summary_records[-1].get("content") or None
+
+            # 将较早的对话压缩为摘要（对话内长期记忆），仅在消息较多且尚无摘要时触发
+            if not conversation_summary and len(dialog_records) > 12:
+                # 取较早的部分作为摘要来源，例如前 len(dialog_records) - 8 条
+                long_records = dialog_records[:-8]
+                lines: List[str] = []
+                for r in long_records:
+                    role = (r.get("role") or "").lower()
+                    text = (r.get("content") or "").strip()
+                    if not text:
+                        continue
+                    if role == "user":
+                        prefix = "用户"
+                    else:
+                        prefix = "助手"
+                    lines.append(f"{prefix}: {text}")
+                if lines:
+                    history_text = "\n".join(lines)
+                    try:
+                        prompt = RAGGraphPrompts.get_conversation_summary_prompt().format(history=history_text)
+                        summary_result = rag_graph.llm.invoke(prompt)
+                        conversation_summary = getattr(summary_result, "content", None) or str(summary_result)
+                        # 将摘要写入 chat_history，type=summary，只在当前会话内使用
+                        save_chat_message(
+                            conversation_id=session_id,
+                            role="system",
+                            message_type="summary",
+                            content=conversation_summary,
+                            extra_data={"node_name": "conversation_summary"}
+                        )
+                        logger.info("已为当前会话生成对话摘要")
+                    except Exception as summarise_error:
+                        logger.error(f"生成对话摘要失败: {summarise_error}")
+                        conversation_summary = None
+
+            # 短期记忆：保留最近 10 条 user/assistant 对话
+            short_dialog = dialog_records[-10:] if len(dialog_records) > 10 else dialog_records
+            for r in short_dialog:
+                role = (r.get("role") or "").lower()
+                content_text = (r.get("content") or "").strip()
+                history_messages.append({
+                    "role": "user" if role == "user" else "assistant",
+                    "content": content_text,
+                })
+
+        except Exception as e:
+            logger.error(f"加载历史消息/摘要失败，将仅使用当前问题: {str(e)}")
+            history_messages = []
+            conversation_summary = None
+
+        # 准备输入数据：会话摘要（如有） + 短期历史对话 + 当前这轮用户问题
+        input_messages: List[Dict[str, str]] = []
+        if conversation_summary:
+            input_messages.append({
+                "role": "system",
+                "content": f"本次对话的背景摘要：{conversation_summary}",
+            })
+        input_messages.extend(history_messages)
+        input_messages.append({"role": "user", "content": content})
+
         input_data = {
-            "messages": [
-                {"role": "user", "content": content}
-            ]
+            "messages": input_messages
         }
         
         # 发送开始信号

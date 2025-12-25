@@ -47,7 +47,9 @@ class KnowledgeDocument(Base):
     url = Column(String(500), nullable=True, comment='文档链接地址')
     file_path = Column(String(500), nullable=True, comment='文件存储路径')
     file_size = Column(Integer, nullable=True, comment='文件大小（字节）')
-    is_processed = Column(Boolean, default=False, nullable=False, comment='是否已处理')
+    is_processed = Column(Boolean, default=False, nullable=False, comment='是否已处理（兼容旧版）')
+    is_vectorized = Column(Boolean, default=False, nullable=False, comment='是否已向量化')
+    is_graphed = Column(Boolean, default=False, nullable=False, comment='是否已图谱化')
     created_at = Column(DateTime, server_default=func.now(), comment='创建时间')
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), comment='更新时间')
     
@@ -64,6 +66,8 @@ class KnowledgeDocument(Base):
             'file_path': self.file_path,
             'file_size': self.file_size,
             'is_processed': self.is_processed,
+            'is_vectorized': self.is_vectorized,
+            'is_graphed': self.is_graphed,
             'created_at': to_china_time(self.created_at).isoformat() if self.created_at else None,
             'updated_at': to_china_time(self.updated_at).isoformat() if self.updated_at else None
         }

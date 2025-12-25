@@ -86,6 +86,27 @@ async def delete_document(document_id: int, current_user: int = Depends(get_curr
     return await library_service.delete_document(document_id, current_user)
 
 
+@router.post("/documents/{document_id}/process")
+async def start_document_processing(document_id: int, current_user: int = Depends(get_current_user)):
+    """开始解析文档（用户点击解析按钮）"""
+    logger.info(f"用户 {current_user} 请求开始解析文档: {document_id}")
+    return await library_service.start_document_processing(document_id, current_user)
+
+
+@router.post("/documents/{document_id}/vectorize")
+async def start_document_vectorize(document_id: int, current_user: int = Depends(get_current_user)):
+    """仅向量化文档（不做图谱）"""
+    logger.info(f"用户 {current_user} 请求向量化文档: {document_id}")
+    return await library_service.start_document_vectorize(document_id, current_user)
+
+
+@router.post("/documents/{document_id}/graph")
+async def start_document_graph(document_id: int, current_user: int = Depends(get_current_user)):
+    """仅图谱化文档（不做向量）"""
+    logger.info(f"用户 {current_user} 请求图谱化文档: {document_id}")
+    return await library_service.start_document_graph(document_id, current_user)
+
+
 @router.get("/documents/{document_id}/content")
 async def get_document_content(document_id: int, current_user: int = Depends(get_current_user)):
     """获取文档内容用于预览（支持 md/txt 等纯文本）"""

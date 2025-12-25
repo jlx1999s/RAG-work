@@ -391,7 +391,7 @@ async def crawl_doc(site: str, prefix: str, if_llm: bool, model_id: str, provide
             logger.info("爬虫运行完成")
 
 
-async def handle_md(md_content, type="print", param=None, collection_id: str = None):
+async def handle_md(md_content, type="print", param=None, collection_id: str = None, document_name: str = "crawled_document"):
     try:
         if type == "print":
             logger.info(md_content)
@@ -407,7 +407,7 @@ async def handle_md(md_content, type="print", param=None, collection_id: str = N
             md_config = ChunkConfig(
                 strategy=ChunkStrategy.MARKDOWN_HEADER
             )
-            document = DocumentContent(content=md_content, document_name="crawled_document")
+            document = DocumentContent(content=md_content, document_name=document_name)
             md_result = chunker.chunk_document(document, md_config)
             
             # 检查分块结果
@@ -416,7 +416,7 @@ async def handle_md(md_content, type="print", param=None, collection_id: str = N
                 return
                 
             param[0].store_chunks_batch([md_result])
-            logger.info(f"成功存储文档分块，共 {len(md_result.chunks)} 个分块")
+            logger.info(f"成功存储文档分块，共 {len(md_result.chunks)} 个分块 (document_name: {document_name})")
             
             # 更新爬虫计数
             if collection_id:
@@ -431,7 +431,7 @@ async def handle_md(md_content, type="print", param=None, collection_id: str = N
             md_config = ChunkConfig(
                 strategy=ChunkStrategy.MARKDOWN_HEADER
             )
-            document = DocumentContent(content=md_content, document_name="crawled_document")
+            document = DocumentContent(content=md_content, document_name=document_name)
             md_result = chunker.chunk_document(document, md_config)
             
             # 检查分块结果
@@ -440,11 +440,11 @@ async def handle_md(md_content, type="print", param=None, collection_id: str = N
                 return
             
             param[0].store_chunks_batch([md_result])
-            logger.info(f"成功存储文档分块到Milvus，共 {len(md_result.chunks)} 个分块")
+            logger.info(f"成功存储文档分块到Milvus，共 {len(md_result.chunks)} 个分块 (document_name: {document_name})")
             # 将Document对象转换为字符串列表
             text_chunks = [chunk.page_content for chunk in md_result.chunks]
             await param[1].insert_texts(text_chunks)
-            logger.info("成功存储文档到LightRAG")
+            logger.info(f"成功存储文档到LightRAG (document_name: {document_name})")
             
             # 更新爬虫计数
             if collection_id:

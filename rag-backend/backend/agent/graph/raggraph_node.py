@@ -520,9 +520,10 @@ class RAGNodes:
         return state
 
     def direct_answer_node(self, state: RAGGraphState, runtime: Runtime[RAGContext]) -> RAGGraphState:
-        """直接回答节点（简化版，不使用记忆功能）
+        """直接回答节点（支持短期对话记忆）
 
-        对于不需要检索的常规问题，直接使用LLM生成答案。
+        对于不需要检索的常规问题，直接使用LLM生成答案，
+        并结合当前会话内的对话历史（短期记忆）进行回答。
         适用于一般性问题、闲聊、简单计算等场景。
 
         Args:
@@ -535,23 +536,50 @@ class RAGNodes:
         self.logger.info("=" * 50)
         self.logger.info("[RAG Graph] 节点: DIRECT_ANSWER - 直接回答")
 
-        # 获取最新的用户消息
+        # 获取当前会话的所有消息
         all_messages = state.get("messages", [])
-        latest_message = all_messages[-1] if all_messages else None
-        
-        if not latest_message:
+        if not all_messages:
             self.logger.warning("没有可用的消息")
             state["final_answer"] = "抱歉，我没有收到您的问题。"
             return state
 
-        # 获取用户问题内容
-        user_question = latest_message.content if hasattr(latest_message, 'content') else str(latest_message)
+        # 最新一条用户消息
+        latest_message = all_messages[-1]
+        user_question = latest_message.content if hasattr(latest_message, "content") else str(latest_message)
         self.logger.info(f"用户问题: {user_question}")
+
+        # 构造对话历史文本（短期记忆），最多保留最近20条
+        try:
+            trimmed_messages = all_messages[-20:] if len(all_messages) > 20 else all_messages
+            history_lines = []
+            for msg in trimmed_messages:
+                # LangChain 消息通常有 type 和 content
+                role = getattr(msg, "type", "user")
+                content = msg.content if hasattr(msg, "content") else str(msg)
+                if not content:
+                    continue
+                if role in ["human", "user"]:
+                    prefix = "用户"
+                elif role in ["ai", "assistant"]:
+                    prefix = "助手"
+                else:
+                    prefix = "系统"
+                history_lines.append(f"{prefix}: {content}")
+
+            conversation_history = "\n".join(history_lines)
+            if not conversation_history.strip():
+                conversation_history = "（当前是本次对话的第一条消息）"
+        except Exception as e:
+            self.logger.error(f"构造对话历史失败: {e}")
+            conversation_history = "（对话历史加载失败，仅根据当前问题回答）"
 
         try:
             # 获取直接回答的提示词
             prompt_template = RAGGraphPrompts.get_direct_answer_prompt()
-            prompt = prompt_template.format(question=user_question)
+            prompt = prompt_template.format(
+                conversation_history=conversation_history,
+                question=user_question
+            )
 
             # 直接调用LLM生成答案
             self.logger.info("调用LLM生成答案...")
