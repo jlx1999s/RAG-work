@@ -58,11 +58,47 @@ export async function sendMessageStream(chatData, onMessage, onError, onComplete
 
     try {
       let chunkCount = 0
+      let buffer = ''
+      const processEventBlock = (part) => {
+        if (!part.trim()) return
+
+        const lines = part.split('\n').filter(Boolean)
+        const dataLines = lines
+          .filter(line => line.startsWith('data:'))
+          .map(line => line.replace(/^data:\s?/, ''))
+
+        if (!dataLines.length) {
+          console.log('🔸 非data事件块:', part)
+          return
+        }
+
+        const jsonStr = dataLines.join('\n')
+        try {
+          console.log('🔍 解析JSON字符串:', jsonStr)
+          const data = JSON.parse(jsonStr)
+          console.log('✨ 解析成功的数据:', data)
+
+          if (data.type === 'error') {
+            console.error('❌ 收到错误数据:', data)
+            onError && onError(new Error(data.message || data.error))
+          } else {
+            console.log('📨 调用onMessage回调，数据类型:', data.type)
+            onMessage && onMessage(data)
+          }
+        } catch (parseError) {
+          console.warn('⚠️ 解析流式数据失败:', parseError, '原始事件块:', part)
+        }
+      }
+
       while (true) {
         const { done, value } = await reader.read()
         
         if (done) {
           console.log('✅ 流式数据读取完成，总共处理了', chunkCount, '个数据块')
+          const remaining = buffer.replace(/\r\n|\r/g, '\n')
+          if (remaining.trim()) {
+            processEventBlock(remaining)
+          }
           onComplete && onComplete()
           break
         }
@@ -70,31 +106,14 @@ export async function sendMessageStream(chatData, onMessage, onError, onComplete
         chunkCount++
         const chunk = decoder.decode(value, { stream: true })
         console.log(`📦 收到第${chunkCount}个数据块:`, chunk)
-        
-        const lines = chunk.split('\n')
-        console.log('📄 分割后的行数:', lines.length, lines)
 
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const jsonStr = line.slice(6)
-              console.log('🔍 解析JSON字符串:', jsonStr)
-              const data = JSON.parse(jsonStr)
-              console.log('✨ 解析成功的数据:', data)
-              
-              if (data.type === 'error') {
-                console.error('❌ 收到错误数据:', data)
-                onError && onError(new Error(data.message || data.error))
-              } else {
-                console.log('📨 调用onMessage回调，数据类型:', data.type)
-                onMessage && onMessage(data)
-              }
-            } catch (parseError) {
-              console.warn('⚠️ 解析流式数据失败:', parseError, '原始行:', line)
-            }
-          } else if (line.trim()) {
-            console.log('🔸 非data行:', line)
-          }
+        buffer += chunk
+        const normalized = buffer.replace(/\r\n|\r/g, '\n')
+        const parts = normalized.split('\n\n')
+        buffer = parts.pop() || ''
+
+        for (const part of parts) {
+          processEventBlock(part)
         }
       }
     } finally {

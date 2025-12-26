@@ -321,6 +321,68 @@ export const useChatStore = defineStore('chat', () => {
         (data) => {
           // 处理流式响应数据
           console.log('收到流式数据:', data)
+
+          const finalizeStreamingMessage = (finalContent = null) => {
+            if (!streamingMessage) {
+              if (aiMessage) {
+                const messageIndex = messages.value.findIndex(m => m.id === aiMessage.id)
+                if (messageIndex !== -1) {
+                  const updated = {
+                    ...messages.value[messageIndex],
+                    content: finalContent !== null ? finalContent : messages.value[messageIndex].content,
+                    isStreaming: false
+                  }
+                  messages.value.splice(messageIndex, 1, updated)
+                  aiMessage = updated
+                }
+              } else if (finalContent !== null) {
+                const newMessage = {
+                  id: (Date.now() + 1).toString(),
+                  content: finalContent,
+                  role: 'assistant',
+                  timestamp: new Date(),
+                  isStreaming: false
+                }
+                messages.value.push(newMessage)
+                if (currentConversation.value && !currentConversation.value.saved) {
+                  if (!currentConversation.value.messages) {
+                    currentConversation.value.messages = []
+                  }
+                  currentConversation.value.messages.push(newMessage)
+                }
+                aiMessage = newMessage
+              }
+              return
+            }
+
+            const messageIndex = messages.value.findIndex(m => m.id === streamingMessage.id)
+            const updated = {
+              ...(messageIndex !== -1 ? messages.value[messageIndex] : streamingMessage),
+              content: finalContent !== null ? finalContent : (messageIndex !== -1 ? messages.value[messageIndex].content : streamingMessage.content),
+              isStreaming: false
+            }
+
+            if (messageIndex !== -1) {
+              messages.value.splice(messageIndex, 1, updated)
+            } else {
+              messages.value.push(updated)
+            }
+
+            if (currentConversation.value && !currentConversation.value.saved) {
+              if (!currentConversation.value.messages) {
+                currentConversation.value.messages = []
+              }
+              const localIndex = currentConversation.value.messages.findIndex(m => m.id === streamingMessage.id)
+              if (localIndex !== -1) {
+                currentConversation.value.messages.splice(localIndex, 1, updated)
+              } else {
+                currentConversation.value.messages.push(updated)
+              }
+            }
+
+            aiMessage = updated
+            streamingMessage = null
+          }
           
           if (data.type === 'start') {
             // 开始处理聊天请求
@@ -333,25 +395,10 @@ export const useChatStore = defineStore('chat', () => {
               // 处理is_final标记：如果是最终消息，结束流式状态
               if (data.is_final) {
                 console.log('✅ 收到最终完整消息，结束流式状态')
-                
-                // 如果有临时流式框，将其转为正式消息
-                if (streamingMessage) {
-                  // 更新最终内容
-                  streamingMessage.content = data.content
-                  streamingMessage.isStreaming = false
-                  
-                  // 将临时消息转为正式消息
-                  const messageIndex = messages.value.findIndex(m => m.id === streamingMessage.id)
-                  if (messageIndex !== -1) {
-                    messages.value.splice(messageIndex, 1, {
-                      ...streamingMessage,
-                      isStreaming: false
-                    })
-                  }
-                  
-                  // 保存到aiMessage以便后续添加sources
-                  aiMessage = messages.value[messageIndex]
-                  streamingMessage = null
+                if (!streamingMessage) {
+                  finalizeStreamingMessage(data.content ?? '')
+                } else {
+                  finalizeStreamingMessage()
                 }
                 return
               }
@@ -424,45 +471,84 @@ export const useChatStore = defineStore('chat', () => {
           } else if (data.type === 'sources') {
             // 处理来源信息
             console.log('收到来源信息:', data.sources)
-            if (aiMessage && data.sources) {
-              // 将来源信息附加到AI消息上
-              const messageIndex = messages.value.findIndex(m => m.id === aiMessage.id)
-              if (messageIndex !== -1) {
-                const updatedMsg = {
-                  ...messages.value[messageIndex],
-                  sources: data.sources
+            if (data.sources) {
+              const targetId = (aiMessage && aiMessage.id) || (streamingMessage && streamingMessage.id)
+              if (targetId) {
+                const messageIndex = messages.value.findIndex(m => m.id === targetId)
+                if (messageIndex !== -1) {
+                  const updatedMsg = {
+                    ...messages.value[messageIndex],
+                    sources: data.sources
+                  }
+                  messages.value.splice(messageIndex, 1, updatedMsg)
+                  if (aiMessage && aiMessage.id === targetId) {
+                    aiMessage = updatedMsg
+                  }
+                  if (streamingMessage && streamingMessage.id === targetId) {
+                    streamingMessage = updatedMsg
+                  }
                 }
-                messages.value.splice(messageIndex, 1, updatedMsg)
-                console.log('✅ 来源信息已附加到AI消息')
-              }
-              
-              // 如果是未保存的对话，同时更新本地存储
-              if (currentConversation.value && !currentConversation.value.saved) {
-                const localAiMessage = currentConversation.value.messages?.find(m => m.id === aiMessage.id)
-                if (localAiMessage) {
-                  localAiMessage.sources = data.sources
+
+                if (currentConversation.value && !currentConversation.value.saved) {
+                  const localMessage = currentConversation.value.messages?.find(m => m.id === targetId)
+                  if (localMessage) {
+                    localMessage.sources = data.sources
+                  }
                 }
               }
             }
           } else if (data.type === 'complete') {
             // 处理完成
             console.log('聊天处理完成:', data.message)
+            finalizeStreamingMessage()
           } else if (data.type === 'answer' && data.content) {
             // 完整答案（备用处理）
-            if (aiMessage) {
-              aiMessage.content = data.content
-            }
+            finalizeStreamingMessage(data.content)
           } else if (data.type === 'message' && data.content) {
             // 消息内容（备用处理）
-            if (aiMessage) {
-              aiMessage.content = data.content
-            }
+            finalizeStreamingMessage(data.content)
           }
         },
         (error) => {
           console.error('流式消息发送失败:', error)
-          if (aiMessage) {
-            aiMessage.content = '抱歉，消息发送失败，请重试。'
+          const errorText = '抱歉，消息发送失败，请重试。'
+          if (streamingMessage) {
+            const messageIndex = messages.value.findIndex(m => m.id === streamingMessage.id)
+            if (messageIndex !== -1) {
+              messages.value.splice(messageIndex, 1, {
+                ...messages.value[messageIndex],
+                content: errorText,
+                isStreaming: false
+              })
+            } else {
+              messages.value.push({
+                ...streamingMessage,
+                content: errorText,
+                isStreaming: false
+              })
+            }
+            if (currentConversation.value && !currentConversation.value.saved) {
+              if (!currentConversation.value.messages) {
+                currentConversation.value.messages = []
+              }
+              const localIndex = currentConversation.value.messages.findIndex(m => m.id === streamingMessage.id)
+              if (localIndex !== -1) {
+                currentConversation.value.messages.splice(localIndex, 1, {
+                  ...currentConversation.value.messages[localIndex],
+                  content: errorText,
+                  isStreaming: false
+                })
+              } else {
+                currentConversation.value.messages.push({
+                  ...streamingMessage,
+                  content: errorText,
+                  isStreaming: false
+                })
+              }
+            }
+            streamingMessage = null
+          } else if (aiMessage) {
+            aiMessage.content = errorText
           }
           streaming.value = false
         },
@@ -470,6 +556,35 @@ export const useChatStore = defineStore('chat', () => {
           streaming.value = false
           currentConversation.value.updatedAt = new Date()
           console.log('流式响应完成，最终内容:', aiMessage?.content)
+          if (streamingMessage) {
+            const messageIndex = messages.value.findIndex(m => m.id === streamingMessage.id)
+            if (messageIndex !== -1) {
+              messages.value.splice(messageIndex, 1, {
+                ...messages.value[messageIndex],
+                isStreaming: false
+              })
+              aiMessage = messages.value[messageIndex]
+            } else {
+              messages.value.push({
+                ...streamingMessage,
+                isStreaming: false
+              })
+              aiMessage = messages.value[messages.value.length - 1]
+            }
+            if (currentConversation.value && !currentConversation.value.saved) {
+              if (!currentConversation.value.messages) {
+                currentConversation.value.messages = []
+              }
+              const localIndex = currentConversation.value.messages.findIndex(m => m.id === streamingMessage.id)
+              if (localIndex !== -1) {
+                currentConversation.value.messages.splice(localIndex, 1, {
+                  ...currentConversation.value.messages[localIndex],
+                  isStreaming: false
+                })
+              }
+            }
+            streamingMessage = null
+          }
         }
       )
       
