@@ -15,7 +15,7 @@ import { httpClient } from './config.js'
  */
 export async function sendMessage(chatData) {
   try {
-    const response = await httpClient.post('/api/llm/chat', chatData)
+    const response = await httpClient.post('/llm/chat', chatData)
     return response
   } catch (error) {
     console.error('发送消息失败:', error)
@@ -33,7 +33,7 @@ export async function sendMessage(chatData) {
  */
 export async function sendMessageStream(chatData, onMessage, onError, onComplete) {
   try {
-    const url = `/api/llm/chat/stream`
+    const url = `/llm/chat/stream`
     console.log('🚀 开始流式请求:', url, chatData)
     
     const response = await fetch(url, {
@@ -116,7 +116,7 @@ export async function sendMessageStream(chatData, onMessage, onError, onComplete
 export async function getChatHistory(userId, conversationId = null) {
   try {
     const params = conversationId ? { conversation_id: conversationId } : {}
-    const response = await httpClient.get(`/api/llm/history/${userId}`, params)
+    const response = await httpClient.get(`/llm/history/${userId}`, params)
     return response
   } catch (error) {
     console.error('获取聊天历史失败:', error)
@@ -131,7 +131,7 @@ export async function getChatHistory(userId, conversationId = null) {
  */
 export async function getSingleConversationHistory(conversationId) {
   try {
-    const response = await httpClient.get(`/api/llm/history/single/${conversationId}`)
+    const response = await httpClient.get(`/llm/history/single/${conversationId}`)
     return response
   } catch (error) {
     console.error('获取单轮对话历史失败:', error)
@@ -146,7 +146,7 @@ export async function getSingleConversationHistory(conversationId) {
  */
 export async function getChatHistoryTitles(userId) {
   try {
-    const response = await httpClient.get(`/api/llm/history/titles/${userId}`)
+    const response = await httpClient.get(`/llm/history/titles/${userId}`)
     return response
   } catch (error) {
     console.error('获取历史记录标题列表失败:', error)
@@ -160,7 +160,7 @@ export async function getChatHistoryTitles(userId) {
  */
 export async function getSignatureUrl() {
   try {
-    const response = await httpClient.post('/api/llm/get-url')
+    const response = await httpClient.post('/llm/get-url')
     return response
   } catch (error) {
     console.error('获取签名URL失败:', error)
@@ -177,7 +177,7 @@ export async function getSignatureUrl() {
  */
 export async function addChatHistory(userId, conversationId, messages) {
   try {
-    const response = await httpClient.post('/api/llm/history', {
+    const response = await httpClient.post('/llm/history', {
       user_id: userId,
       conversation_id: conversationId,
       messages: messages
@@ -197,7 +197,7 @@ export async function addChatHistory(userId, conversationId, messages) {
  */
 export async function createConversation(userId, title = null) {
   try {
-    const response = await httpClient.post('/api/llm/conversation', {
+    const response = await httpClient.post('/llm/conversation', {
       user_id: userId,
       title: title
     })
@@ -215,7 +215,7 @@ export async function createConversation(userId, title = null) {
  */
 export async function deleteConversation(conversationId) {
   try {
-    const response = await httpClient.delete(`/api/llm/conversation/${conversationId}`)
+    const response = await httpClient.delete(`/llm/conversation/${conversationId}`)
     return response
   } catch (error) {
     console.error('删除对话失败:', error)

@@ -12,12 +12,30 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      // 代理所有以 /api 开头的请求到后端服务器，并去掉 /api 前缀
+      // 代理 /api 开头的请求
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,
         secure: false,
         rewrite: (path) => path.replace(/^\/api/, '')
+      },
+      // 代理 /auth 开头的请求
+      '/auth': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        secure: false
+      },
+      // 代理 /llm 开头的请求
+      '/llm': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        secure: false
+      },
+      // 代理 /knowledge 开头的请求
+      '/knowledge': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        secure: false
       }
     }
   }

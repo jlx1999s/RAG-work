@@ -75,9 +75,9 @@
             class="p-3 rounded-lg cursor-pointer transition-all group"
             :class="{
               'bg-amber-50 border border-amber-200':
-                currentConversation?.id === conversation.id,
+                currentConversation && currentConversation.id === conversation.id,
               'hover:bg-gray-50 border border-transparent':
-                currentConversation?.id !== conversation.id,
+                !currentConversation || currentConversation.id !== conversation.id,
             }"
           >
             <div class="flex items-center justify-between">
@@ -127,7 +127,7 @@
         class="bg-white/80 backdrop-blur-sm border-b border-gray-100 p-4 shadow-sm"
       >
         <h2 class="text-lg font-normal text-gray-900">
-          {{ currentConversation?.title || "选择或创建一个对话" }}
+          {{ (currentConversation && currentConversation.title) || "选择或创建一个对话" }}
         </h2>
       </div>
 
@@ -241,13 +241,94 @@
 
               <!-- 消息内容 -->
               <div class="flex-1 max-w-3xl">
+                <!-- 流式状态特殊样式 -->
+                <div 
+                  v-if="message.isStreaming" 
+                  class="streaming-message-container"
+                >
+                  <!-- 流式头部 -->
+                  <div class="streaming-header">
+                    <span class="loading-dot">●</span>
+                    <span class="streaming-text">AI 正在生成中...</span>
+                  </div>
+                  
+                  <!-- 流式内容 -->
+                  <div
+                    class="streaming-content text-sm text-gray-700 prose prose-sm max-w-none"
+                    v-html="renderMarkdown(message.content)"
+                  ></div>
+                  <span class="cursor-blink">█</span>
+                </div>
+                
+                <!-- 正常消息样式 -->
                 <div
+                  v-else
                   class="text-sm text-gray-700 prose prose-sm max-w-none"
                   v-html="renderMarkdown(message.content)"
                 ></div>
 
-                <!-- 操作按钮 -->
-                <div class="flex items-center gap-2 mt-3">
+                <!-- 来源引用 -->
+                <div v-if="message.sources && message.sources.length > 0" class="mt-3 flex flex-wrap gap-2">
+                  <div 
+                    v-for="(source, index) in message.sources" 
+                    :key="index"
+                    class="relative group"
+                  >
+                    <!-- 来源标记按钮 -->
+                    <button
+                      class="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs hover:bg-blue-100 transition-colors border border-blue-200"
+                      :title="'来源 ' + source.index"
+                    >
+                      <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd" />
+                      </svg>
+                      <span>[{{ source.index }}]</span>
+                    </button>
+                    
+                    <!-- 悬浮提示卡片 -->
+                    <div class="absolute bottom-full left-0 mb-2 w-96 bg-white rounded-lg shadow-xl border border-gray-200 p-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
+                      <!-- 来源标题 -->
+                      <div class="flex items-center justify-between mb-2 pb-2 border-b border-gray-100">
+                        <div class="flex items-center gap-2">
+                          <svg class="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                          </svg>
+                          <span class="text-sm font-medium text-gray-900">{{ source.document_name }}</span>
+                        </div>
+                        <span 
+                          class="text-xs px-2 py-0.5 rounded"
+                          :class="source.retrieval_mode === 'lightrag_graph' ? 'bg-purple-100 text-purple-700' : 'bg-green-100 text-green-700'"
+                        >
+                          {{ source.retrieval_mode === 'lightrag_graph' ? '图检索' : '向量检索' }}
+                        </span>
+                      </div>
+                      
+                      <!-- 引用内容 -->
+                      <div class="text-xs text-gray-600 leading-relaxed max-h-64 overflow-y-auto">
+                        <div class="whitespace-pre-wrap">{{ source.content }}</div>
+                      </div>
+                      
+                      <!-- 元信息 -->
+                      <div class="mt-2 pt-2 border-t border-gray-100 space-y-1">
+                        <div class="flex items-center justify-between text-xs text-gray-400">
+                          <span v-if="source.chunk_index !== undefined">区块序号: {{ source.chunk_index }}</span>
+                          <span v-if="source.content_length" class="ml-auto">内容长度: {{ source.content_length }} 字符</span>
+                        </div>
+                        <!-- 调试信息：显示完整metadata -->
+                        <details class="text-xs text-gray-400">
+                          <summary class="cursor-pointer hover:text-gray-600">调试信息</summary>
+                          <pre class="mt-1 text-xs bg-gray-50 p-2 rounded overflow-x-auto">{{ JSON.stringify(source, null, 2) }}</pre>
+                        </details>
+                      </div>
+                      
+                      <!-- 小三角 -->
+                      <div class="absolute bottom-0 left-4 transform translate-y-1/2 rotate-45 w-2 h-2 bg-white border-r border-b border-gray-200"></div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 操作按钮（只在非流式状态显示） -->
+                <div v-if="!message.isStreaming" class="flex items-center gap-2 mt-3">
                   <button
                     class="text-gray-400 hover:text-gray-600 p-1.5 rounded hover:bg-gray-100 transition-colors"
                     title="编辑"
@@ -1113,7 +1194,7 @@ const createNewConversation = async () => {
 
 const selectConversation = async (conversationId) => {
   // 如果点击的是当前对话，不做任何操作
-  if (currentConversation.value?.id === conversationId) {
+  if (currentConversation.value && currentConversation.value.id === conversationId) {
     return;
   }
 
@@ -1406,6 +1487,31 @@ watch(selectedLibrary, (newLibrary) => {
   localStorage.setItem("selectedLibrary", newLibrary);
 });
 
+// 监听流式消息内容变化，自动滚动到底部
+watch(
+  () => {
+    // 找到最后一条流式消息
+    const streamingMsg = messages.value.find(m => m.isStreaming);
+    return streamingMsg ? streamingMsg.content : null;
+  },
+  (newContent) => {
+    if (newContent) {
+      // 使用nextTick确保DOM已更新
+      nextTick(() => {
+        // 1. 滚动主消息容器到底部
+        scrollToBottom();
+        
+        // 2. 查找并滚动流式消息内部到底部
+        const streamingContainer = document.querySelector('.streaming-message-container');
+        if (streamingContainer) {
+          streamingContainer.scrollTop = streamingContainer.scrollHeight;
+        }
+      });
+    }
+  },
+  { flush: 'post' } // 在DOM更新后执行
+);
+
 // 检查认证状态
 if (!authStore.isAuthenticated) {
   router.push("/login");
@@ -1629,5 +1735,129 @@ const restorePanelWidth = () => {
   font-size: 14px;
   line-height: 1.5;
   white-space: pre-wrap;
+}
+
+/* 流式消息容器样式 - 企业级体验 */
+.streaming-message-container {
+  border: 2px solid #4A9EFF;
+  background: linear-gradient(135deg, #f5f7fa 0%, #e3f2fd 100%);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 2px 8px rgba(74, 158, 255, 0.15);
+  animation: pulse-border 2s infinite;
+  position: relative;
+  overflow: hidden;
+  
+  /* 限制最大高度，超出部分滚动 */
+  max-height: 400px;
+  overflow-y: auto;
+  scroll-behavior: smooth; /* 平滑滚动 */
+}
+
+/* 响应式适配 - 不同屏幕高度 */
+@media (max-height: 768px) {
+  .streaming-message-container {
+    max-height: 300px; /* 小屏幕：300px */
+  }
+}
+
+@media (min-height: 1440px) {
+  .streaming-message-container {
+    max-height: 600px; /* 大屏幕：600px */
+  }
+}
+
+@media (min-height: 2160px) {
+  .streaming-message-container {
+    max-height: 800px; /* 4K屏幕：800px */
+  }
+}
+
+/* 自定义滚动条样式（Webkit浏览器） */
+.streaming-message-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.streaming-message-container::-webkit-scrollbar-track {
+  background: rgba(74, 158, 255, 0.1);
+  border-radius: 3px;
+}
+
+.streaming-message-container::-webkit-scrollbar-thumb {
+  background: rgba(74, 158, 255, 0.5);
+  border-radius: 3px;
+}
+
+.streaming-message-container::-webkit-scrollbar-thumb:hover {
+  background: rgba(74, 158, 255, 0.7);
+}
+
+/* 边框脉冲动画 */
+@keyframes pulse-border {
+  0%, 100% { 
+    box-shadow: 0 2px 8px rgba(74, 158, 255, 0.15), 0 0 0 0 rgba(74, 158, 255, 0.4);
+  }
+  50% { 
+    box-shadow: 0 2px 8px rgba(74, 158, 255, 0.15), 0 0 0 4px rgba(74, 158, 255, 0);
+  }
+}
+
+/* 流式头部 */
+.streaming-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #4A9EFF;
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(74, 158, 255, 0.2);
+}
+
+/* 加载点动画 */
+.loading-dot {
+  animation: blink 1.5s infinite;
+  color: #4A9EFF;
+  font-size: 16px;
+}
+
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0.3; }
+}
+
+/* 流式文本 */
+.streaming-text {
+  animation: fade-in-out 2s infinite;
+}
+
+@keyframes fade-in-out {
+  0%, 100% { opacity: 0.8; }
+  50% { opacity: 1; }
+}
+
+/* 流式内容 */
+.streaming-content {
+  position: relative;
+}
+
+/* 光标闪烁 */
+.cursor-blink {
+  display: inline-block;
+  animation: cursor-blink 1s infinite;
+  color: #4A9EFF;
+  margin-left: 2px;
+  font-weight: bold;
+}
+
+@keyframes cursor-blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+/* 普通消息过渡动画 */
+.flex-1.max-w-3xl {
+  transition: all 0.3s ease;
 }
 </style>

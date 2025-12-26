@@ -137,6 +137,65 @@ class KnowledgeLibraryAPI {
   }
 
   /**
+   * 开始解析文档（用户点击解析按钮）
+   * @param {number} documentId - 文档ID
+   * @returns {Promise} API响应
+   */
+  async startDocumentProcessing(documentId) {
+    try {
+      const response = await httpClient.post(`/api/knowledge/documents/${documentId}/process`)
+      return response
+    } catch (error) {
+      console.error('开始解析文档失败:', error)
+      throw error
+    }
+  }
+
+  /**
+   * 仅向量化文档（不做图谱）
+   * @param {number} documentId - 文档ID
+   * @returns {Promise} API响应
+   */
+  async startDocumentVectorize(documentId) {
+    try {
+      const response = await httpClient.post(`/api/knowledge/documents/${documentId}/vectorize`)
+      return response
+    } catch (error) {
+      console.error('开始向量化文档失败:', error)
+      throw error
+    }
+  }
+
+  /**
+   * 仅图谱化文档（不做向量）
+   * @param {number} documentId - 文档ID
+   * @returns {Promise} API响应
+   */
+  async startDocumentGraph(documentId) {
+    try {
+      const response = await httpClient.post(`/api/knowledge/documents/${documentId}/graph`)
+      return response
+    } catch (error) {
+      console.error('开始图谱化文档失败:', error)
+      throw error
+    }
+  }
+
+  /**
+   * 获取处理队列状态
+   * @returns {Promise} API响应，包含队列信息和正在处理的文档列表
+   */
+  async getQueueStatus() {
+    try {
+      const response = await httpClient.get('/api/knowledge/processing/queue-status')
+      return response
+    } catch (error) {
+      console.error('获取队列状态失败:', error)
+      throw error
+    }
+  }
+
+  /**
    * 获取文档内容（用于预览）
    * @param {number} documentId - 文档ID
    * @returns {Promise} API响应，包含 content / content_type / url 等信息
@@ -147,6 +206,21 @@ class KnowledgeLibraryAPI {
       return response
     } catch (error) {
       console.error('获取文档内容失败:', error)
+      throw error
+    }
+  }
+
+  /**
+   * 获取文档分块信息
+   * @param {number} documentId - 文档ID
+   * @returns {Promise} API响应，包含 chunks数组和总数
+   */
+  async getDocumentChunks(documentId) {
+    try {
+      const response = await httpClient.get(`/api/knowledge/documents/${documentId}/chunks`)
+      return response
+    } catch (error) {
+      console.error('获取文档分块失败:', error)
       throw error
     }
   }

@@ -197,10 +197,17 @@ export const useChatStore = defineStore('chat', () => {
             } else if (msg.type === 'messages') {
               // 历史记录中的普通消息：type: "messages"
               // 保持原有的role（user或assistant）
-              return {
+              const messageObj = {
                 ...baseMessage,
                 role: msg.role
               }
+              
+              // 如果是assistant消息，提取sources信息
+              if (msg.role === 'assistant' && msg.extra_data && msg.extra_data.sources) {
+                messageObj.sources = msg.extra_data.sources
+              }
+              
+              return messageObj
             } else {
               // 其他情况保持原格式
               return {
@@ -277,9 +284,9 @@ export const useChatStore = defineStore('chat', () => {
     try {
       streaming.value = true
 
-      // 不在开始时创建AI消息占位符，而是在收到第一个token时创建
-      // 这样可以确保AI消息显示在所有node_update消息之后
-      let aiMessage = null
+      // 企业级体验：使用临时流式框
+      let streamingMessage = null  // 正在流式输出的临时消息
+      let aiMessage = null         // 最终保存的AI消息
 
       // 构造聊天请求数据
       const authStore = useAuthStore()
@@ -321,30 +328,56 @@ export const useChatStore = defineStore('chat', () => {
           } else if (data.type === 'token') {
             // 实时追加token内容(包括空格和换行符)
             if (data.content !== undefined && data.content !== null) {
-              console.log('🔄 收到token:', JSON.stringify(data.content))
+              console.log('🔄 收到token:', JSON.stringify(data.content), 'is_final:', data.is_final)
 
-              // 如果还没有创建AI消息，在收到第一个token时创建
-              // 这样可以确保AI消息显示在所有node_update消息之后
-              if (!aiMessage) {
-                aiMessage = {
+              // 处理is_final标记：如果是最终消息，结束流式状态
+              if (data.is_final) {
+                console.log('✅ 收到最终完整消息，结束流式状态')
+                
+                // 如果有临时流式框，将其转为正式消息
+                if (streamingMessage) {
+                  // 更新最终内容
+                  streamingMessage.content = data.content
+                  streamingMessage.isStreaming = false
+                  
+                  // 将临时消息转为正式消息
+                  const messageIndex = messages.value.findIndex(m => m.id === streamingMessage.id)
+                  if (messageIndex !== -1) {
+                    messages.value.splice(messageIndex, 1, {
+                      ...streamingMessage,
+                      isStreaming: false
+                    })
+                  }
+                  
+                  // 保存到aiMessage以便后续添加sources
+                  aiMessage = messages.value[messageIndex]
+                  streamingMessage = null
+                }
+                return
+              }
+
+              // 如果还没有创建临时流式框，在收到第一个token时创建
+              if (!streamingMessage) {
+                streamingMessage = {
                   id: (Date.now() + 1).toString(),
                   content: '',
                   role: 'assistant',
-                  timestamp: new Date()
+                  timestamp: new Date(),
+                  isStreaming: true  // 标记为流式状态
                 }
-                messages.value.push(aiMessage)
+                messages.value.push(streamingMessage)
 
-                // 如果是未保存的对话，同时保存AI消息到本地存储
+                // 如果是未保存的对话，同时保存到本地存储
                 if (currentConversation.value && !currentConversation.value.saved) {
                   if (!currentConversation.value.messages) {
                     currentConversation.value.messages = []
                   }
-                  currentConversation.value.messages.push(aiMessage)
+                  currentConversation.value.messages.push(streamingMessage)
                 }
               }
 
-              // 找到消息在数组中的索引
-              const messageIndex = messages.value.findIndex(m => m.id === aiMessage.id)
+              // 找到临时消息在数组中的索引
+              const messageIndex = messages.value.findIndex(m => m.id === streamingMessage.id)
               if (messageIndex !== -1) {
                 // 创建新对象以确保Vue响应式更新
                 const currentMsg = messages.value[messageIndex]
@@ -357,14 +390,14 @@ export const useChatStore = defineStore('chat', () => {
                 console.log('🔄 更新: 长度从', currentMsg.content.length, '到', updatedMsg.content.length)
                 console.log('🔄 新增内容:', JSON.stringify(data.content))
               } else {
-                console.warn('⚠️ 未找到AI消息，aiMessage.id:', aiMessage.id)
+                console.warn('⚠️ 未找到临时消息，streamingMessage.id:', streamingMessage.id)
               }
 
               // 如果是未保存的对话，同时更新本地存储
               if (currentConversation.value && !currentConversation.value.saved) {
-                const localAiMessage = currentConversation.value.messages?.find(m => m.id === aiMessage.id)
-                if (localAiMessage) {
-                  localAiMessage.content += data.content
+                const localStreamingMessage = currentConversation.value.messages?.find(m => m.id === streamingMessage.id)
+                if (localStreamingMessage) {
+                  localStreamingMessage.content += data.content
                 }
               }
             }
@@ -387,6 +420,29 @@ export const useChatStore = defineStore('chat', () => {
                 currentConversation.value.messages = []
               }
               currentConversation.value.messages.push(nodeUpdateMessage)
+            }
+          } else if (data.type === 'sources') {
+            // 处理来源信息
+            console.log('收到来源信息:', data.sources)
+            if (aiMessage && data.sources) {
+              // 将来源信息附加到AI消息上
+              const messageIndex = messages.value.findIndex(m => m.id === aiMessage.id)
+              if (messageIndex !== -1) {
+                const updatedMsg = {
+                  ...messages.value[messageIndex],
+                  sources: data.sources
+                }
+                messages.value.splice(messageIndex, 1, updatedMsg)
+                console.log('✅ 来源信息已附加到AI消息')
+              }
+              
+              // 如果是未保存的对话，同时更新本地存储
+              if (currentConversation.value && !currentConversation.value.saved) {
+                const localAiMessage = currentConversation.value.messages?.find(m => m.id === aiMessage.id)
+                if (localAiMessage) {
+                  localAiMessage.sources = data.sources
+                }
+              }
             }
           } else if (data.type === 'complete') {
             // 处理完成

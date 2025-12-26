@@ -13,7 +13,7 @@ import { httpClient, setAuthToken, getAuthToken } from './config.js'
  */
 export async function login(email, password) {
   try {
-    const response = await httpClient.post('/api/auth/login', {
+    const response = await httpClient.post('/auth/login', {
       email,
       password
     })
@@ -43,7 +43,7 @@ export async function login(email, password) {
  */
 export async function register(email, password, username) {
   try {
-    const response = await httpClient.post('/api/auth/register', {
+    const response = await httpClient.post('/auth/register', {
       username,
       password,
       email
@@ -71,7 +71,7 @@ export async function register(email, password, username) {
  */
 export async function getCurrentUser() {
   try {
-    const response = await httpClient.get('/api/auth/me')
+    const response = await httpClient.get('/auth/me')
     return response
   } catch (error) {
     console.error('获取用户信息失败:', error)
@@ -85,7 +85,7 @@ export async function getCurrentUser() {
  */
 export async function accessProtected() {
   try {
-    const response = await httpClient.get('/api/auth/protected')
+    const response = await httpClient.get('/auth/protected')
     return response
   } catch (error) {
     console.error('访问受保护资源失败:', error)
