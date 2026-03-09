@@ -117,6 +117,12 @@
         >
           文档库管理
         </router-link>
+        <router-link
+          to="/evaluation"
+          class="mt-2 block text-center py-2 px-3 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-50 rounded-lg transition-colors font-normal"
+        >
+          评测实验室
+        </router-link>
       </div>
     </div>
 

@@ -6,6 +6,7 @@ import History from '../views/History.vue'
 import DocumentLibrary from '../views/DocumentLibrary.vue'
 import KnowledgeGraph from '../views/KnowledgeGraph.vue'
 import Demo from '../views/Demo.vue'
+import Evaluation from '../views/Evaluation.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -35,6 +36,12 @@ const router = createRouter({
       path: '/document-library',
       name: 'document-library',
       component: DocumentLibrary,
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/evaluation',
+      name: 'evaluation',
+      component: Evaluation,
       meta: { requiresAuth: true }
     },
     {

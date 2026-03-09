@@ -79,6 +79,7 @@ class HttpClient {
       headers: this.getHeaders(),
       ...options
     }
+    const timeout = typeof config.timeout === 'number' ? config.timeout : API_CONFIG.TIMEOUT
 
     // 如果有body数据且不是FormData，转换为JSON字符串
     if (config.body && !(config.body instanceof FormData)) {
@@ -87,7 +88,7 @@ class HttpClient {
 
     try {
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), API_CONFIG.TIMEOUT)
+      const timeoutId = setTimeout(() => controller.abort(), timeout)
       
       const response = await fetch(fullUrl, {
         ...config,
@@ -146,6 +147,14 @@ class HttpClient {
     return this.request(url, {
       method: 'POST',
       body: data
+    })
+  }
+
+  async postWithOptions(url, data = {}, options = {}) {
+    return this.request(url, {
+      method: 'POST',
+      body: data,
+      ...options
     })
   }
 
