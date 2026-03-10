@@ -6,10 +6,12 @@
 """
 import os
 from typing import Optional, Dict, Any
+import tempfile
 from backend.config.log import get_logger
 from backend.config.oss import OssClientFactory
 from backend.rag.storage.milvus_storage import MilvusStorage
 from backend.rag.storage.lightrag_storage import LightRAGStorage
+from backend.rag.chunks.document_extraction import DocumentExtractor
 from backend.rag.chunks.chunks import TextChunker
 from backend.rag.chunks.models import ChunkConfig, ChunkStrategy, DocumentContent
 
@@ -44,7 +46,8 @@ class DocumentProcessor:
         document_name: str,
         oss_bucket: str,
         oss_key: str,
-        file_type: str = "md"
+        file_type: str = "md",
+        source_url: Optional[str] = None
     ) -> Dict[str, Any]:
         """处理文档的完整流程
         
@@ -64,7 +67,7 @@ class DocumentProcessor:
         
         try:
             # 1. 从 OSS 读取文档内容
-            content = await self._read_from_oss(oss_bucket, oss_key)
+            content = await self._read_from_oss(oss_bucket, oss_key, file_type, source_url)
             
             if not content or not content.strip():
                 raise ValueError(f"文档内容为空: {document_name}")
@@ -108,7 +111,8 @@ class DocumentProcessor:
         document_name: str,
         oss_bucket: str,
         oss_key: str,
-        file_type: str = "md"
+        file_type: str = "md",
+        source_url: Optional[str] = None
     ) -> Dict[str, Any]:
         """仅向量化文档（分块 + Milvus 存储）
         
@@ -125,7 +129,7 @@ class DocumentProcessor:
         
         try:
             # 1. 从 OSS 读取文档内容
-            content = await self._read_from_oss(oss_bucket, oss_key)
+            content = await self._read_from_oss(oss_bucket, oss_key, file_type, source_url)
             
             if not content or not content.strip():
                 raise ValueError(f"文档内容为空: {document_name}")
@@ -166,7 +170,8 @@ class DocumentProcessor:
         document_name: str,
         oss_bucket: str,
         oss_key: str,
-        file_type: str = "md"
+        file_type: str = "md",
+        source_url: Optional[str] = None
     ) -> Dict[str, Any]:
         """仅图谱化文档（LightRAG + Neo4j）
         
@@ -183,7 +188,7 @@ class DocumentProcessor:
         
         try:
             # 1. 从 OSS 读取文档内容
-            content = await self._read_from_oss(oss_bucket, oss_key)
+            content = await self._read_from_oss(oss_bucket, oss_key, file_type, source_url)
             
             if not content or not content.strip():
                 raise ValueError(f"文档内容为空: {document_name}")
@@ -219,7 +224,7 @@ class DocumentProcessor:
             traceback.print_exc()
             raise Exception(error_msg)
     
-    async def _read_from_oss(self, bucket: str, key: str) -> str:
+    async def _read_from_oss(self, bucket: str, key: str, file_type: str, source_url: Optional[str]) -> str:
         """从 OSS 读取文档内容（使用 SDK，不走 HTTP）
         
         Args:
@@ -242,8 +247,27 @@ class DocumentProcessor:
             request = oss.GetObjectRequest(bucket=bucket, key=decoded_key)
             result = client.get_object(request)
             
-            # 读取内容并解码
-            content = result.body.read().decode('utf-8')
+            raw_bytes = result.body.read()
+            normalized_type = (file_type or "").lower()
+            if normalized_type in {"pdf", "doc", "docx"}:
+                extractor = DocumentExtractor()
+                suffix = f".{normalized_type}" if normalized_type else ""
+                with tempfile.NamedTemporaryFile(delete=True, suffix=suffix) as temp_file:
+                    temp_file.write(raw_bytes)
+                    temp_file.flush()
+                    parsed = extractor.read_document(temp_file.name)
+                    content = parsed.content
+                if normalized_type == "pdf" and (not content or not content.strip()):
+                    mineru_url = os.getenv("MINERU_API_URL")
+                    mineru_key = os.getenv("MINERU_API_KEY")
+                    if source_url and mineru_url and mineru_key:
+                        try:
+                            parsed = extractor.read_document(source_url, pdf_extract_method="mineru")
+                            content = parsed.content
+                        except Exception as mineru_error:
+                            logger.warning(f"MinerU 解析失败: {source_url}, 错误: {str(mineru_error)}")
+            else:
+                content = raw_bytes.decode("utf-8")
             
             logger.info(f"成功从 OSS 读取: {bucket}/{decoded_key}, 大小: {len(content)} bytes")
             return content
@@ -270,12 +294,13 @@ class DocumentProcessor:
         """
         try:
             # 根据文件类型选择分块策略
-            if file_type in ["md", "markdown"]:
+            normalized_type = (file_type or "").lower()
+            if normalized_type in ["md", "markdown"]:
                 strategy = ChunkStrategy.MARKDOWN_HEADER
+                chunk_config = ChunkConfig(strategy=strategy)
             else:
-                strategy = ChunkStrategy.MARKDOWN_HEADER  # 默认也用 Markdown 策略
-            
-            chunk_config = ChunkConfig(strategy=strategy)
+                strategy = ChunkStrategy.RECURSIVE
+                chunk_config = ChunkConfig(strategy=strategy, chunk_size=1000, chunk_overlap=200)
             
             # 创建文档对象
             document = DocumentContent(
@@ -348,6 +373,7 @@ async def process_uploaded_document(
     oss_key: str,
     collection_id: str,
     file_type: str = "md",
+    source_url: Optional[str] = None,
     vectorize_only: bool = False,
     graph_only: bool = False
 ) -> Dict[str, Any]:
@@ -400,7 +426,8 @@ async def process_uploaded_document(
             document_name=document_name,
             oss_bucket=oss_bucket,
             oss_key=oss_key,
-            file_type=file_type
+            file_type=file_type,
+            source_url=source_url
         )
     elif graph_only:
         logger.info(f"仅执行图谱化: {document_name}")
@@ -408,7 +435,8 @@ async def process_uploaded_document(
             document_name=document_name,
             oss_bucket=oss_bucket,
             oss_key=oss_key,
-            file_type=file_type
+            file_type=file_type,
+            source_url=source_url
         )
     else:
         logger.info(f"执行完整处理（向量+图谱）: {document_name}")
@@ -417,5 +445,6 @@ async def process_uploaded_document(
             document_name=document_name,
             oss_bucket=oss_bucket,
             oss_key=oss_key,
-            file_type=file_type
+            file_type=file_type,
+            source_url=source_url
         )

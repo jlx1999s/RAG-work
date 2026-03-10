@@ -640,13 +640,11 @@ async def _process_uploaded_file(url: str, collection_id: str, document_name: st
         elif url_lower.endswith(".txt"):
             file_type = "txt"
         elif url_lower.endswith(".pdf"):
-            msg = f"暂不支持自动处理 PDF 格式文件，请使用网站链接方式添加"
-            logger.warning(msg)
-            return
-        elif url_lower.endswith((".doc", ".docx")):
-            msg = f"暂不支持自动处理 Word 格式文件，请使用网站链接方式添加"
-            logger.warning(msg)
-            return
+            file_type = "pdf"
+        elif url_lower.endswith(".doc"):
+            file_type = "doc"
+        elif url_lower.endswith(".docx"):
+            file_type = "docx"
         
         # 使用新的文档处理器，根据模式调用
         vectorize_only = (mode == "vectorize")
@@ -658,6 +656,7 @@ async def _process_uploaded_file(url: str, collection_id: str, document_name: st
             oss_key=oss_key,
             collection_id=collection_id,
             file_type=file_type,
+            source_url=url,
             vectorize_only=vectorize_only,
             graph_only=graph_only
         )
