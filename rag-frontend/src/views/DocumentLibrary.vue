@@ -1348,7 +1348,8 @@ const addDocument = async () => {
         // 3. 设置文档的URL为OSS文件路径
         const presign = uploadResponse.data;
         const presignUrl = typeof presign === "string" ? presign : presign.url;
-        documentData.url = presignUrl.split("?")[0];
+        const downloadUrl = typeof presign === "string" ? presign : presign.download_url;
+        documentData.url = downloadUrl || presignUrl;
         documentData.content = ""; // 文件上传后不需要content字段
 
         ElMessage.success("文件上传成功");

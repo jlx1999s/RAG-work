@@ -186,12 +186,15 @@ export const useChatStore = defineStore('chat', () => {
             
             // 格式转换逻辑：统一历史记录和实时消息的格式
             if (msg.type === 'updates' && msg.role === 'system') {
+              const extraData = msg.extra_data || {}
               // 历史记录中的节点更新消息：type: "updates", role: "system"
               // 转换为实时消息格式：role: "node_update"
               return {
                 ...baseMessage,
                 role: 'node_update',
-                node_name: msg.node_name,
+                node_name: msg.node_name || extraData.node_name,
+                step_index: msg.step_index || extraData.step_index || null,
+                trace_data: msg.trace_data || extraData.trace_data || null,
                 expanded: false // 默认折叠状态
               }
             } else if (msg.type === 'messages') {
@@ -456,6 +459,8 @@ export const useChatStore = defineStore('chat', () => {
               content: data.content,
               role: 'node_update',
               node_name: data.node_name,
+              step_index: data.step_index || null,
+              trace_data: data.trace_data || null,
               timestamp: new Date(),
               expanded: false // 默认折叠状态
             }

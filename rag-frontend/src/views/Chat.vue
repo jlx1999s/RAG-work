@@ -221,12 +221,29 @@
                   </svg>
                 </div>
                 <div class="node-update-title">
-                  <p>{{ getNodeDisplayName(message.node_name) }}</p>
+                  <p>
+                    {{ message.step_index ? `#${message.step_index} ` : "" }}{{ getNodeDisplayName(message.node_name) }}
+                  </p>
                 </div>
               </summary>
               <div class="node-update-content">
                 <div class="node-update-content-text">
                   {{ message.content }}
+                </div>
+                <div
+                  v-if="message.trace_data && getTraceBlocks(message.trace_data).length > 0"
+                  class="trace-block-list"
+                >
+                  <div
+                    v-for="(block, blockIndex) in getTraceBlocks(message.trace_data)"
+                    :key="`${message.id}-${block.title}-${blockIndex}`"
+                    class="trace-block"
+                  >
+                    <div class="trace-block-title">{{ block.title }}</div>
+                    <div class="trace-block-body">
+                      {{ block.value }}
+                    </div>
+                  </div>
                 </div>
               </div>
             </details>
@@ -303,15 +320,18 @@
                         </div>
                         <span 
                           class="text-xs px-2 py-0.5 rounded"
-                          :class="source.retrieval_mode === 'lightrag_graph' ? 'bg-purple-100 text-purple-700' : 'bg-green-100 text-green-700'"
+                          :class="source.retrieval_mode === 'lightrag_graph' ? 'bg-purple-100 text-purple-700' : source.retrieval_mode === 'vector_chart' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'"
                         >
-                          {{ source.retrieval_mode === 'lightrag_graph' ? '图检索' : '向量检索' }}
+                          {{ source.retrieval_mode === 'lightrag_graph' ? '图谱检索' : source.retrieval_mode === 'vector_chart' ? '图表检索' : '向量检索' }}
                         </span>
                       </div>
                       
                       <!-- 引用内容 -->
                       <div class="text-xs text-gray-600 leading-relaxed max-h-64 overflow-y-auto">
                         <div class="whitespace-pre-wrap">{{ source.content }}</div>
+                        <div v-if="source.chart_image_url" class="mt-3">
+                          <img :src="source.chart_image_url" alt="图表来源" class="w-full max-h-64 object-contain rounded border border-gray-200 bg-gray-50" />
+                        </div>
                       </div>
                       
                       <!-- 元信息 -->
@@ -319,6 +339,10 @@
                         <div class="flex items-center justify-between text-xs text-gray-400">
                           <span v-if="source.chunk_index !== undefined">区块序号: {{ source.chunk_index }}</span>
                           <span v-if="source.content_length" class="ml-auto">内容长度: {{ source.content_length }} 字符</span>
+                        </div>
+                        <div class="flex items-center justify-between text-xs text-gray-400">
+                          <span v-if="source.section_title">章节: {{ source.section_title }}</span>
+                          <span v-if="source.page_number !== undefined && source.page_number !== null">页码: {{ source.page_number }}</span>
                         </div>
                         <!-- 调试信息：显示完整metadata -->
                         <details class="text-xs text-gray-400">
@@ -330,6 +354,22 @@
                       <!-- 小三角 -->
                       <div class="absolute bottom-0 left-4 transform translate-y-1/2 rotate-45 w-2 h-2 bg-white border-r border-b border-gray-200"></div>
                     </div>
+                  </div>
+                </div>
+                <div v-if="getSourceChartImages(message).length > 0" class="mt-3 space-y-2">
+                  <div
+                    v-for="chart in getSourceChartImages(message)"
+                    :key="chart.key"
+                    class="rounded-lg border border-gray-200 bg-white p-2"
+                  >
+                    <div class="mb-2 text-xs text-gray-500">
+                      来源 [{{ chart.index }}]{{ chart.chartId ? ` · ${chart.chartId}` : '' }}
+                    </div>
+                    <img
+                      :src="chart.url"
+                      alt="图表来源"
+                      class="w-full max-h-96 object-contain rounded border border-gray-100 bg-gray-50"
+                    />
                   </div>
                 </div>
 
@@ -570,15 +610,21 @@
         <div class="mermaid-container" ref="mermaidContainer">
           <pre class="mermaid" id="agent-flowchart">
 flowchart TD
-    A(["开始"]) --> n2["是否需要检索"]
-    B{"判断原始问题类型"} --> C["适合使用向量数据库"] & D["适合使用图数据库"]
-    n1["由原始问题扩展子问题"] --> B
-    n2 -- 是 --> n1
-    n6["生成答案结点"] --> n3(["结束"])
-    n2 -- 否 --> n7["直接回答"]
-    n7 --> n3
-    D --> n6
-    C --> n6
+    A(["开始"]) --> T{"是否需要工具"}
+    T -- 是 --> U["工具调用"]
+    T -- 否 --> R{"是否需要检索"}
+    U --> Z(["结束"])
+    R -- 否 --> D["直接回答"]
+    D --> Z
+    R -- 是 --> E["扩展子问题"]
+    E --> C{"检索类型分类"}
+    C -- 向量 --> V["向量检索"]
+    C -- 图谱 --> G["图检索"]
+    C -- 混合 --> H["融合检索"]
+    V --> N["生成答案"]
+    G --> N
+    H --> N
+    N --> Z
           </pre>
         </div>
 
@@ -592,6 +638,43 @@ flowchart TD
             <span class="text-sm font-normal text-gray-900"
               >正在执行: {{ currentExecutingNode }}</span
             >
+          </div>
+        </div>
+        <div class="mt-4 p-3 bg-white/80 border border-gray-200 rounded-lg shadow-sm">
+          <div class="text-sm font-normal text-gray-900 mb-2">流程追溯</div>
+          <div v-if="traceCalls.length === 0" class="text-xs text-gray-500">
+            等待问题调用...
+          </div>
+          <div v-else class="trace-call-list">
+            <button
+              v-for="(call, index) in traceCalls"
+              :key="getTraceCallKey(call, index)"
+              class="trace-call-item"
+              :class="{ active: isTraceCallActive(call) }"
+              @click="selectTraceCall(call)"
+            >
+              <span class="trace-call-index">Q{{ index + 1 }}</span>
+              <span class="trace-call-title">{{ getTraceCallTitle(call, index) }}</span>
+            </button>
+          </div>
+          <div v-if="traceCalls.length > 0 && traceTimeline.length === 0" class="text-xs text-gray-500 mt-2">
+            当前问题暂无节点追溯记录
+          </div>
+          <div v-else-if="traceTimeline.length > 0" class="trace-timeline">
+            <div
+              v-for="step in traceTimeline"
+              :key="getTraceStepKey(step)"
+              class="trace-step"
+              :class="{ active: isTraceStepActive(step) }"
+              @click="selectTraceStep(step)"
+            >
+              <div class="trace-step-header">
+                <span class="trace-step-index">#{{ step.step_index || "?" }}</span>
+                <span class="trace-step-name">{{ getNodeDisplayName(step.node_name) }}</span>
+                <span class="trace-step-time">{{ formatTraceTime(step) }}</span>
+              </div>
+              <div class="trace-step-summary">{{ step.content }}</div>
+            </div>
           </div>
         </div>
       </div>
@@ -986,6 +1069,9 @@ const newMessage = ref("");
 const messagesContainer = ref(null);
 const mermaidContainer = ref(null); // Mermaid容器引用
 const currentExecutingNode = ref(""); // 当前执行的节点
+const currentExecutingNodeName = ref("");
+const selectedTraceNodeName = ref("");
+const selectedTraceCallId = ref("");
 const ragMode = ref("auto"); // 改为单选
 const selectedLibrary = ref(""); // 改为单选
 const knowledgeLibraries = ref([]); // 知识库列表
@@ -1009,30 +1095,24 @@ const startWidth = ref(0);
 
 // 节点名称到流程图节点ID的映射
 const nodeNameToId = {
-  // 开始和结束节点
   start: "A", // 开始
-  end: "n3", // 结束
-
-  // 主流程节点
-  route_question: "n2", // 是否需要检索
-  check_retrieval_needed: "n2", // 是否需要检索(别名)
-
-  // 检索分支
-  query_expansion: "n1", // 由原始问题扩展子问题
-  expand_subquestions: "n1", // 由原始问题扩展子问题(别名)
-
-  classify_question: "B", // 判断原始问题类型
-  classify_question_type: "B", // 判断原始问题类型(别名)
-
-  retrieve_from_vector: "C", // 适合使用向量数据库
-  vector_db_retrieval: "C", // 向量数据库检索(别名)
-
-  retrieve_from_graph: "D", // 适合使用图数据库
-  graph_db_retrieval: "D", // 图数据库检索(别名)
-
-  // 答案生成
-  generate_answer: "n6", // 生成答案结点
-  direct_answer: "n7", // 直接回答
+  end: "Z", // 结束
+  check_tool_needed: "T",
+  route_tool_needed: "T",
+  tool_calling: "U",
+  route_question: "R",
+  check_retrieval_needed: "R",
+  query_expansion: "E",
+  expand_subquestions: "E",
+  classify_question: "C",
+  classify_question_type: "C",
+  retrieve_from_vector: "V",
+  vector_db_retrieval: "V",
+  retrieve_from_graph: "G",
+  graph_db_retrieval: "G",
+  hybrid_retrieval: "H",
+  generate_answer: "N",
+  direct_answer: "D",
 };
 
 // RAG选项配置
@@ -1040,6 +1120,7 @@ const ragOptions = [
   { value: "auto", label: "自动判断" },
   { value: "no_retrieval", label: "不开启检索" },
   { value: "vector_only", label: "向量检索" },
+  { value: "hybrid", label: "融合检索" },
   { value: "graph_only", label: "图检索" },
 ];
 
@@ -1049,8 +1130,64 @@ const currentConversation = computed(() => chatStore.currentConversation);
 const messages = computed(() => chatStore.messages);
 const streaming = computed(() => chatStore.streaming);
 const loading = computed(() => chatStore.loading);
+const traceCalls = computed(() => {
+  const calls = [];
+  let currentCall = null;
+  messages.value.forEach((message) => {
+    if (message.role === "user") {
+      currentCall = {
+        id: message.id,
+        question: message.content || "",
+        timestamp: message.timestamp || null,
+        updates: [],
+      };
+      calls.push(currentCall);
+      return;
+    }
+    if (message.role === "node_update" && currentCall) {
+      currentCall.updates.push(message);
+    }
+  });
+  return calls;
+});
+const activeTraceCall = computed(() => {
+  if (!traceCalls.value.length) {
+    return null;
+  }
+  const selected = traceCalls.value.find((call) => call.id === selectedTraceCallId.value);
+  return selected || traceCalls.value[traceCalls.value.length - 1];
+});
+const traceTimeline = computed(() => {
+  const updates = activeTraceCall.value?.updates || [];
+  return updates.map((message, index) => ({
+    ...message,
+    step_index: message.step_index || index + 1,
+  }));
+});
 
 // 方法
+const getSourceChartImages = (message) => {
+  if (!message || !Array.isArray(message.sources)) {
+    return [];
+  }
+  const seen = new Set();
+  const charts = [];
+  for (const source of message.sources) {
+    const url = source?.chart_image_url;
+    if (!url || seen.has(url)) {
+      continue;
+    }
+    seen.add(url);
+    charts.push({
+      key: `${source.index || 0}-${url}`,
+      index: source.index || 0,
+      chartId: source.chart_id || "",
+      url,
+    });
+  }
+  return charts;
+};
+
 const logout = () => {
   authStore.logout();
   router.push("/login");
@@ -1078,6 +1215,7 @@ const highlightNode = (nodeName, retryCount = 0) => {
   );
 
   // 更新当前执行节点显示
+  currentExecutingNodeName.value = nodeName;
   currentExecutingNode.value = getNodeDisplayName(nodeName);
 
   // 移除所有已有的高亮
@@ -1184,6 +1322,8 @@ const highlightNode = (nodeName, retryCount = 0) => {
 // 清除所有节点高亮
 const clearNodeHighlights = () => {
   currentExecutingNode.value = "";
+  currentExecutingNodeName.value = "";
+  selectedTraceNodeName.value = "";
   if (!mermaidContainer.value) return;
 
   const svg = mermaidContainer.value.querySelector("svg");
@@ -1292,15 +1432,132 @@ const renderMarkdown = (content) => {
   return md.render(content);
 };
 
+const getTraceStepKey = (step) => {
+  const traceData = step.trace_data || {};
+  return `${step.id}-${step.step_index || traceData.timestamp || step.content}`;
+};
+
+const formatTraceTime = (step) => {
+  const timestamp =
+    step?.trace_data?.timestamp ||
+    (step?.timestamp ? new Date(step.timestamp).getTime() : null);
+  if (!timestamp) {
+    return "";
+  }
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return date.toLocaleTimeString("zh-CN", { hour12: false });
+};
+
+const isTraceStepActive = (step) => {
+  if (selectedTraceNodeName.value) {
+    return selectedTraceNodeName.value === step.node_name;
+  }
+  return currentExecutingNodeName.value === step.node_name;
+};
+
+const selectTraceStep = (step) => {
+  if (!step || !step.node_name) {
+    return;
+  }
+  if (selectedTraceNodeName.value === step.node_name) {
+    selectedTraceNodeName.value = "";
+    return;
+  }
+  selectedTraceNodeName.value = step.node_name;
+  highlightNode(step.node_name);
+};
+
+const getTraceCallKey = (call, index) => {
+  return `${call.id}-${index}`;
+};
+
+const getTraceCallTitle = (call, index) => {
+  const text = (call?.question || "").replace(/\s+/g, " ").trim();
+  if (!text) {
+    return `问题 ${index + 1}`;
+  }
+  return text.length > 32 ? `${text.slice(0, 32)}...` : text;
+};
+
+const isTraceCallActive = (call) => {
+  return activeTraceCall.value?.id === call.id;
+};
+
+const selectTraceCall = (call) => {
+  if (!call?.id) {
+    return;
+  }
+  selectedTraceCallId.value = call.id;
+  selectedTraceNodeName.value = "";
+  currentExecutingNode.value = "";
+  currentExecutingNodeName.value = "";
+  const svg = mermaidContainer.value?.querySelector("svg");
+  if (svg) {
+    svg.querySelectorAll(".node-active, .node-completed").forEach((el) => {
+      el.classList.remove("node-active", "node-completed");
+    });
+  }
+};
+
+const formatTraceValue = (value) => {
+  if (value === null || value === undefined || value === "") {
+    return "";
+  }
+  if (typeof value === "object") {
+    return JSON.stringify(value, null, 2);
+  }
+  return String(value);
+};
+
+const getTraceBlocks = (traceData) => {
+  if (!traceData || typeof traceData !== "object") {
+    return [];
+  }
+  const blocks = [];
+  const orderedKeys = ["summary", "decision", "output"];
+  const usedKeys = new Set();
+  for (const key of orderedKeys) {
+    if (traceData[key] !== undefined) {
+      const valueText = formatTraceValue(traceData[key]);
+      if (valueText) {
+        blocks.push({
+          title: key === "summary" ? "摘要" : key === "decision" ? "决策" : "输出",
+          value: valueText,
+        });
+      }
+      usedKeys.add(key);
+    }
+  }
+  for (const [key, value] of Object.entries(traceData)) {
+    if (usedKeys.has(key) || ["step_index", "node_name", "timestamp"].includes(key)) {
+      continue;
+    }
+    const valueText = formatTraceValue(value);
+    if (valueText) {
+      blocks.push({
+        title: key,
+        value: valueText,
+      });
+    }
+  }
+  return blocks;
+};
+
 // 获取节点显示名称
 const getNodeDisplayName = (nodeName) => {
   const nodeNameMap = {
     start: "开始",
+    check_tool_needed: "工具需求判断",
+    tool_calling: "工具调用",
     check_retrieval_needed: "检索需求判断",
     expand_subquestions: "子问题扩展",
     classify_question_type: "问题类型分类",
     vector_db_retrieval: "向量数据库检索",
     graph_db_retrieval: "图数据库检索",
+    hybrid_retrieval: "融合检索",
     graph_db_retrieval_node: "图数据库检索",
     generate_answer: "生成答案",
     direct_answer: "直接回答",
@@ -1414,6 +1671,21 @@ onMounted(async () => {
 
 // 监听消息变化，自动滚动到底部
 watch(
+  traceCalls,
+  (newCalls) => {
+    if (!newCalls.length) {
+      selectedTraceCallId.value = "";
+      return;
+    }
+    const exists = newCalls.some((call) => call.id === selectedTraceCallId.value);
+    if (!exists) {
+      selectedTraceCallId.value = newCalls[newCalls.length - 1].id;
+    }
+  },
+  { immediate: true, deep: true }
+);
+
+watch(
   messages,
   (newMessages, oldMessages) => {
     console.log("🔄 Messages数组发生变化:");
@@ -1427,17 +1699,23 @@ watch(
     // 如果是节点更新消息,高亮对应节点
     if (lastMessage && lastMessage.role === "node_update") {
       console.log("🎯 检测到节点更新:", lastMessage.node_name);
-      // 使用nextTick确保DOM已更新,再用延迟确保Mermaid已渲染
-      // 增加延迟时间以确保Mermaid完全渲染完成
-      nextTick(() => {
-        setTimeout(() => {
-          highlightNode(lastMessage.node_name);
-        }, 200); // 从100ms增加到200ms
-      });
+      const latestCallId =
+        traceCalls.value.length > 0
+          ? traceCalls.value[traceCalls.value.length - 1].id
+          : "";
+      const shouldFollowLatest =
+        !selectedTraceCallId.value || selectedTraceCallId.value === latestCallId;
+      if (shouldFollowLatest) {
+        nextTick(() => {
+          setTimeout(() => {
+            highlightNode(lastMessage.node_name);
+          }, 200);
+        });
+      }
     }
 
-    // 如果是用户消息,清除之前的高亮
     if (lastMessage && lastMessage.role === "user") {
+      selectedTraceCallId.value = lastMessage.id;
       clearNodeHighlights();
     }
 
@@ -1741,6 +2019,137 @@ const restorePanelWidth = () => {
   font-size: 14px;
   line-height: 1.5;
   white-space: pre-wrap;
+}
+
+.trace-block-list {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.trace-block {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.trace-block-title {
+  padding: 8px 10px;
+  border-bottom: 1px solid #f1f5f9;
+  font-size: 12px;
+  color: #374151;
+}
+
+.trace-block-body {
+  padding: 10px;
+  font-size: 12px;
+  color: #1f2937;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+.trace-call-list {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+.trace-call-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 7px 9px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.trace-call-item:hover {
+  border-color: #d1d5db;
+  background: #f3f4f6;
+}
+
+.trace-call-item.active {
+  border-color: #1f2937;
+  background: #f3f4f6;
+}
+
+.trace-call-index {
+  font-size: 11px;
+  color: #6b7280;
+  min-width: 22px;
+}
+
+.trace-call-title {
+  font-size: 12px;
+  color: #111827;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  text-align: left;
+}
+
+.trace-timeline {
+  display: grid;
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.trace-step {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.trace-step:hover {
+  border-color: #d1d5db;
+  background: #f3f4f6;
+}
+
+.trace-step.active {
+  border-color: #1f2937;
+  background: #f3f4f6;
+}
+
+.trace-step-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.trace-step-index {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.trace-step-name {
+  font-size: 12px;
+  color: #111827;
+}
+
+.trace-step-time {
+  margin-left: auto;
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.trace-step-summary {
+  font-size: 12px;
+  color: #4b5563;
+  line-height: 1.4;
+  word-break: break-word;
 }
 
 /* 流式消息容器样式 - 企业级体验 */
