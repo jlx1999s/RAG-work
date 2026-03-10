@@ -1,0 +1,683 @@
+[
+    [
+        {
+            "type": "image",
+            "content": {
+                "image_source": {
+                    "path": "images/e8c4c74ac89be575e885de8d857aed33149845375d3b26e10041ced886596f06.jpg"
+                },
+                "image_caption": [],
+                "image_footnote": []
+            },
+            "bbox": [
+                356,
+                198,
+                401,
+                236
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "CPIPC中国研究生系列大赛"
+                    }
+                ]
+            },
+            "bbox": [
+                403,
+                212,
+                443,
+                237
+            ]
+        },
+        {
+            "type": "image",
+            "content": {
+                "image_source": {
+                    "path": "images/edcbb3aa7389c047c6e06f0f2a5b6bd1ca1d22436f36a36be706383a5c055825.jpg"
+                },
+                "image_caption": [],
+                "image_footnote": []
+            },
+            "bbox": [
+                450,
+                198,
+                505,
+                237
+            ]
+        },
+        {
+            "type": "image",
+            "content": {
+                "image_source": {
+                    "path": "images/168be376ce1479ec06701b25caea207ac402a4b8a302368715c4fa19a9f079d1.jpg"
+                },
+                "image_caption": [],
+                "image_footnote": []
+            },
+            "bbox": [
+                515,
+                198,
+                569,
+                237
+            ]
+        },
+        {
+            "type": "image",
+            "content": {
+                "image_source": {
+                    "path": "images/45032bfedad07f21e863e589d0eacbd02747a6fe07e6496678458a03ec3c45cd.jpg"
+                },
+                "image_caption": [],
+                "image_footnote": []
+            },
+            "bbox": [
+                581,
+                197,
+                636,
+                237
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "2024 "
+                    }
+                ]
+            },
+            "bbox": [
+                257,
+                268,
+                431,
+                316
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "“华为杯”第二十一届中国研究生数学建模竞赛"
+                    }
+                ]
+            },
+            "bbox": [
+                440,
+                268,
+                737,
+                315
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "\"HUAWEI Cup\" The 21st China Post-Graduate Mathematical Contest in Modeling "
+                    }
+                ]
+            },
+            "bbox": [
+                258,
+                318,
+                736,
+                330
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "获奖证书"
+                    }
+                ]
+            },
+            "bbox": [
+                381,
+                355,
+                615,
+                399
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "新疆大学 斩凌霄 同学"
+                    }
+                ]
+            },
+            "bbox": [
+                378,
+                419,
+                615,
+                441
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "荣获“华为杯”第二十一届中国研究生数学建模竞赛"
+                    }
+                ]
+            },
+            "bbox": [
+                248,
+                458,
+                749,
+                479
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "二等奖"
+                    }
+                ]
+            },
+            "bbox": [
+                398,
+                529,
+                596,
+                569
+            ]
+        },
+        {
+            "type": "image",
+            "content": {
+                "image_source": {
+                    "path": "images/08d6bcb3f213711a66221a5349cb20013d3537846df65f32b5fb31c3d0c1da47.jpg"
+                },
+                "image_caption": [],
+                "image_footnote": []
+            },
+            "bbox": [
+                230,
+                600,
+                357,
+                686
+            ]
+        },
+        {
+            "type": "image",
+            "content": {
+                "image_source": {
+                    "path": "images/608ce7a892f2b0e0598b5139b284f2ab12c7acaa7e9a32c93e26843633c26964.jpg"
+                },
+                "image_caption": [],
+                "image_footnote": []
+            },
+            "bbox": [
+                364,
+                601,
+                484,
+                686
+            ]
+        },
+        {
+            "type": "image",
+            "content": {
+                "image_source": {
+                    "path": "images/cf2909f7b63dbae966d4e8aeb690c3d432aa6d6ed2599084ac55e20f2ce51828.jpg"
+                },
+                "image_caption": [],
+                "image_footnote": []
+            },
+            "bbox": [
+                494,
+                601,
+                633,
+                678
+            ]
+        },
+        {
+            "type": "image",
+            "content": {
+                "image_source": {
+                    "path": "images/2bf063c7398e2da17857d4dc757d7e296f3a167354ae9e11af85a81819b09b2f.jpg"
+                },
+                "image_caption": [],
+                "image_footnote": []
+            },
+            "bbox": [
+                643,
+                601,
+                763,
+                686
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "编号：E2024201707"
+                    }
+                ]
+            },
+            "bbox": [
+                238,
+                695,
+                364,
+                706
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "二〇二四年十二月"
+                    }
+                ]
+            },
+            "bbox": [
+                655,
+                695,
+                751,
+                706
+            ]
+        }
+    ],
+    [
+        {
+            "type": "title",
+            "content": {
+                "title_content": [
+                    {
+                        "type": "text",
+                        "content": "获奖证书"
+                    }
+                ],
+                "level": 1
+            },
+            "bbox": [
+                433,
+                156,
+                593,
+                181
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "certificate of award "
+                    }
+                ]
+            },
+            "bbox": [
+                445,
+                186,
+                583,
+                196
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "新疆大学的参赛作品《基于深度学习的高速公路拥堵预测及应急车道启用模型研究》，在2025年（第十一届）全国大学生统计建模大赛新疆赛区赛区选拔赛中，荣获研究生组一等奖。"
+                    }
+                ]
+            },
+            "bbox": [
+                243,
+                216,
+                749,
+                265
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "参赛队员：靳凌霄、陈欣宜、左燕妮"
+                    }
+                ]
+            },
+            "bbox": [
+                245,
+                305,
+                497,
+                319
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "指导老师：刘淑娴"
+                    }
+                ]
+            },
+            "bbox": [
+                247,
+                324,
+                376,
+                338
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "证书编号：20253802A0004"
+                    }
+                ]
+            },
+            "bbox": [
+                218,
+                361,
+                379,
+                374
+            ]
+        },
+        {
+            "type": "image",
+            "content": {
+                "image_source": {
+                    "path": "images/dc65bdcb282e42b14cd30c45e84f627df092f5632fa7ddfa943de6679d447c03.jpg"
+                },
+                "image_caption": [],
+                "image_footnote": []
+            },
+            "bbox": [
+                670,
+                328,
+                783,
+                388
+            ]
+        }
+    ],
+    [
+        {
+            "type": "title",
+            "content": {
+                "title_content": [
+                    {
+                        "type": "text",
+                        "content": "全国大学英语四级考试(CET4)成绩详情"
+                    }
+                ],
+                "level": 1
+            },
+            "bbox": [
+                221,
+                101,
+                724,
+                126
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "姓名：靳凌霄 "
+                    }
+                ]
+            },
+            "bbox": [
+                169,
+                171,
+                351,
+                191
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "证件号码：410326199908245014"
+                    }
+                ]
+            },
+            "bbox": [
+                169,
+                200,
+                507,
+                219
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "学校：南阳理工学院"
+                    }
+                ]
+            },
+            "bbox": [
+                169,
+                231,
+                413,
+                250
+            ]
+        },
+        {
+            "type": "title",
+            "content": {
+                "title_content": [
+                    {
+                        "type": "text",
+                        "content": "笔试成绩 "
+                    }
+                ],
+                "level": 1
+            },
+            "bbox": [
+                428,
+                274,
+                517,
+                293
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "准考证号：418510211114302"
+                    }
+                ]
+            },
+            "bbox": [
+                169,
+                309,
+                470,
+                326
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "总 分: 459"
+                    }
+                ]
+            },
+            "bbox": [
+                171,
+                338,
+                326,
+                357
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "听力：158"
+                    }
+                ]
+            },
+            "bbox": [
+                277,
+                363,
+                450,
+                382
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "阅 读：167"
+                    }
+                ]
+            },
+            "bbox": [
+                277,
+                395,
+                450,
+                413
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "写作和翻译：134"
+                    }
+                ]
+            },
+            "bbox": [
+                277,
+                425,
+                450,
+                443
+            ]
+        },
+        {
+            "type": "title",
+            "content": {
+                "title_content": [
+                    {
+                        "type": "text",
+                        "content": "口试成绩 "
+                    }
+                ],
+                "level": 1
+            },
+            "bbox": [
+                428,
+                458,
+                517,
+                476
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "准考证号：--"
+                    }
+                ]
+            },
+            "bbox": [
+                169,
+                493,
+                302,
+                510
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "等级：--"
+                    }
+                ]
+            },
+            "bbox": [
+                169,
+                523,
+                302,
+                539
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "成绩报告单编号：211141851003488"
+                    }
+                ]
+            },
+            "bbox": [
+                169,
+                569,
+                532,
+                587
+            ]
+        },
+        {
+            "type": "paragraph",
+            "content": {
+                "paragraph_content": [
+                    {
+                        "type": "text",
+                        "content": "您在报名期间已选择需要纸质成绩报告单（证书），8月27日9时- 8月31日17时可再次登录报名网站进行修改。"
+                    }
+                ]
+            },
+            "bbox": [
+                196,
+                618,
+                749,
+                657
+            ]
+        }
+    ]
+]

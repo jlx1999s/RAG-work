@@ -10,6 +10,9 @@ import zipfile
 import uuid
 from urllib.parse import urlparse
 from .models import DocumentContent
+from backend.config.log import get_logger
+
+logger = get_logger(__name__)
 
 class DocumentExtractor:
     def __init__(self):
@@ -18,6 +21,9 @@ class DocumentExtractor:
     
     def _extract_document_name(self, file_path: str) -> str:
         """从文件路径提取文档名称"""
+        if file_path.startswith(("http://", "https://")):
+            parsed = urlparse(file_path)
+            return os.path.basename(parsed.path)
         return os.path.basename(file_path)
     
     def read_document(self, file_path: str, pdf_extract_method: str = "pypdf2") -> DocumentContent:
@@ -27,7 +33,13 @@ class DocumentExtractor:
             file_path: 文件路径
             pdf_extract_method: PDF提取方式，可选"pypdf2"或"mineru"
         """
-        file_extension = file_path.split('.')[-1].lower()
+        if file_path.startswith(("http://", "https://")):
+            parsed = urlparse(file_path)
+            _, ext = os.path.splitext(parsed.path)
+            file_extension = ext.lstrip(".").lower()
+        else:
+            _, ext = os.path.splitext(file_path)
+            file_extension = ext.lstrip(".").lower()
         
         if file_extension == 'pdf':
             if pdf_extract_method == "pypdf2":
@@ -100,14 +112,22 @@ class DocumentExtractor:
             提取的文本内容
         """
         # 从环境变量或实例变量获取API配置
-        api_url =os.getenv('MINERU_API_URL')
+        api_url = os.getenv('MINERU_API_URL')
         api_key =os.getenv('MINERU_API_KEY')
+        model_version = os.getenv('MINERU_MODEL_VERSION', 'vlm')
+        is_ocr = os.getenv('MINERU_IS_OCR', 'true').lower() == 'true'
+        enable_formula = os.getenv('MINERU_ENABLE_FORMULA', 'true').lower() == 'true'
+        enable_table = os.getenv('MINERU_ENABLE_TABLE', 'true').lower() == 'true'
+        language = os.getenv('MINERU_LANGUAGE', 'ch')
         
+        if not api_url:
+            raise ValueError("请设置环境变量 MINERU_API_URL")
         if not api_key:
             raise ValueError("请设置环境变量 MINERU_API_KEY 或在初始化时提供API密钥")
         
         # 使用官方API端点
-        task_url = f"{api_url.rstrip('/')}/extract/task"
+        api_url = api_url.rstrip('/')
+        task_url = api_url if api_url.endswith('/extract/task') else f"{api_url}/extract/task"
         
         # 准备请求头
         headers = {
@@ -124,16 +144,15 @@ class DocumentExtractor:
             # 准备请求数据
             data = {
                 'url': pdf_url,
-                'is_ocr': True,  # 启用OCR识别
-                'enable_formula': True  # 是否启用公式识别
+                'model_version': model_version,
+                'is_ocr': is_ocr,
+                'enable_formula': enable_formula,
+                'enable_table': enable_table,
+                'language': language
             }
             
             # 创建解析任务
-            response = requests.post(
-                task_url,
-                headers=headers,
-                json=data
-            )
+            response = requests.post(task_url, headers=headers, json=data, timeout=30)
             
             response.raise_for_status()
             
@@ -152,7 +171,7 @@ class DocumentExtractor:
                 raise Exception("未获得有效的任务ID")
             
             # 轮询获取处理结果
-            return self._poll_mineru_task_result(task_id)
+            return self._poll_mineru_task_result(task_id, task_url)
             
         except requests.exceptions.RequestException as e:
             raise Exception(f"MinerU API请求失败: {str(e)}")
@@ -161,7 +180,7 @@ class DocumentExtractor:
         except Exception as e:
             raise Exception(f"MinerU处理过程中发生错误: {str(e)}")
     
-    def _poll_mineru_task_result(self, task_id: str, max_wait_time: int = 300) -> str:
+    def _poll_mineru_task_result(self, task_id: str, task_url: str, max_wait_time: int = 300) -> str:
         """轮询MinerU任务处理结果
         
         Args:
@@ -173,10 +192,8 @@ class DocumentExtractor:
         """
         
         # 从环境变量或实例变量获取API配置
-        api_url =os.getenv('MINERU_API_URL')
-        api_key =os.getenv('MINERU_API_KEY')
-        
-        result_url = f"{api_url.rstrip('/')}/extract/task/{task_id}"
+        api_key = os.getenv('MINERU_API_KEY')
+        result_url = f"{task_url.rstrip('/')}/{task_id}"
         headers = {
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {api_key}'
@@ -219,7 +236,7 @@ class DocumentExtractor:
                         progress = task_data.get('extract_progress', {})
                         extracted_pages = progress.get('extracted_pages', 0)
                         total_pages = progress.get('total_pages', 0)
-                        print(f"解析进度: {extracted_pages}/{total_pages} 页")
+                        logger.info(f"MinerU解析进度: {extracted_pages}/{total_pages} 页")
                     time.sleep(5)  # 等待5秒后重试
                     continue
                 else:

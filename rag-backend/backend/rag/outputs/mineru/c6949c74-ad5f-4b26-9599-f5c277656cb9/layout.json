@@ -1,0 +1,1466 @@
+{
+    "pdf_info": [
+        {
+            "para_blocks": [
+                {
+                    "type": "image",
+                    "bbox": [
+                        212,
+                        167,
+                        239,
+                        199
+                    ],
+                    "blocks": [
+                        {
+                            "bbox": [
+                                212,
+                                167,
+                                239,
+                                199
+                            ],
+                            "lines": [
+                                {
+                                    "bbox": [
+                                        212,
+                                        167,
+                                        239,
+                                        199
+                                    ],
+                                    "spans": [
+                                        {
+                                            "bbox": [
+                                                212,
+                                                167,
+                                                239,
+                                                199
+                                            ],
+                                            "type": "image",
+                                            "image_path": "e8c4c74ac89be575e885de8d857aed33149845375d3b26e10041ced886596f06.jpg"
+                                        }
+                                    ]
+                                }
+                            ],
+                            "index": 0,
+                            "angle": 0,
+                            "type": "image_body"
+                        }
+                    ],
+                    "index": 0
+                },
+                {
+                    "bbox": [
+                        240,
+                        179,
+                        264,
+                        200
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                240,
+                                179,
+                                264,
+                                200
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        240,
+                                        179,
+                                        264,
+                                        200
+                                    ],
+                                    "type": "text",
+                                    "content": "CPIPC中国研究生系列大赛"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 1
+                },
+                {
+                    "type": "image",
+                    "bbox": [
+                        268,
+                        167,
+                        301,
+                        200
+                    ],
+                    "blocks": [
+                        {
+                            "bbox": [
+                                268,
+                                167,
+                                301,
+                                200
+                            ],
+                            "lines": [
+                                {
+                                    "bbox": [
+                                        268,
+                                        167,
+                                        301,
+                                        200
+                                    ],
+                                    "spans": [
+                                        {
+                                            "bbox": [
+                                                268,
+                                                167,
+                                                301,
+                                                200
+                                            ],
+                                            "type": "image",
+                                            "image_path": "edcbb3aa7389c047c6e06f0f2a5b6bd1ca1d22436f36a36be706383a5c055825.jpg"
+                                        }
+                                    ]
+                                }
+                            ],
+                            "index": 2,
+                            "angle": 0,
+                            "type": "image_body"
+                        }
+                    ],
+                    "index": 2
+                },
+                {
+                    "type": "image",
+                    "bbox": [
+                        307,
+                        167,
+                        339,
+                        200
+                    ],
+                    "blocks": [
+                        {
+                            "bbox": [
+                                307,
+                                167,
+                                339,
+                                200
+                            ],
+                            "lines": [
+                                {
+                                    "bbox": [
+                                        307,
+                                        167,
+                                        339,
+                                        200
+                                    ],
+                                    "spans": [
+                                        {
+                                            "bbox": [
+                                                307,
+                                                167,
+                                                339,
+                                                200
+                                            ],
+                                            "type": "image",
+                                            "image_path": "168be376ce1479ec06701b25caea207ac402a4b8a302368715c4fa19a9f079d1.jpg"
+                                        }
+                                    ]
+                                }
+                            ],
+                            "index": 3,
+                            "angle": 0,
+                            "type": "image_body"
+                        }
+                    ],
+                    "index": 3
+                },
+                {
+                    "type": "image",
+                    "bbox": [
+                        346,
+                        166,
+                        379,
+                        200
+                    ],
+                    "blocks": [
+                        {
+                            "bbox": [
+                                346,
+                                166,
+                                379,
+                                200
+                            ],
+                            "lines": [
+                                {
+                                    "bbox": [
+                                        346,
+                                        166,
+                                        379,
+                                        200
+                                    ],
+                                    "spans": [
+                                        {
+                                            "bbox": [
+                                                346,
+                                                166,
+                                                379,
+                                                200
+                                            ],
+                                            "type": "image",
+                                            "image_path": "45032bfedad07f21e863e589d0eacbd02747a6fe07e6496678458a03ec3c45cd.jpg"
+                                        }
+                                    ]
+                                }
+                            ],
+                            "index": 4,
+                            "angle": 0,
+                            "type": "image_body"
+                        }
+                    ],
+                    "index": 4
+                },
+                {
+                    "bbox": [
+                        153,
+                        226,
+                        257,
+                        266
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                153,
+                                226,
+                                257,
+                                266
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        153,
+                                        226,
+                                        257,
+                                        266
+                                    ],
+                                    "type": "text",
+                                    "content": "2024"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 5
+                },
+                {
+                    "bbox": [
+                        262,
+                        226,
+                        439,
+                        265
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                262,
+                                226,
+                                439,
+                                265
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        262,
+                                        226,
+                                        439,
+                                        265
+                                    ],
+                                    "type": "text",
+                                    "content": "“华为杯”第二十一届中国研究生数学建模竞赛"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 6
+                },
+                {
+                    "bbox": [
+                        154,
+                        268,
+                        438,
+                        278
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                154,
+                                268,
+                                438,
+                                278
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        154,
+                                        268,
+                                        438,
+                                        278
+                                    ],
+                                    "type": "text",
+                                    "content": "\"HUAWEI Cup\" The 21st China Post-Graduate Mathematical Contest in Modeling"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 7
+                },
+                {
+                    "bbox": [
+                        227,
+                        299,
+                        366,
+                        336
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                227,
+                                299,
+                                366,
+                                336
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        227,
+                                        299,
+                                        366,
+                                        336
+                                    ],
+                                    "type": "text",
+                                    "content": "获奖证书"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 8
+                },
+                {
+                    "bbox": [
+                        225,
+                        353,
+                        366,
+                        371
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                225,
+                                353,
+                                366,
+                                371
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        225,
+                                        353,
+                                        366,
+                                        371
+                                    ],
+                                    "type": "text",
+                                    "content": "新疆大学 斩凌霄 同学"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 9
+                },
+                {
+                    "bbox": [
+                        148,
+                        386,
+                        446,
+                        403
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                148,
+                                386,
+                                446,
+                                403
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        148,
+                                        386,
+                                        446,
+                                        403
+                                    ],
+                                    "type": "text",
+                                    "content": "荣获“华为杯”第二十一届中国研究生数学建模竞赛"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 10
+                },
+                {
+                    "bbox": [
+                        237,
+                        445,
+                        355,
+                        479
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                237,
+                                445,
+                                355,
+                                479
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        237,
+                                        445,
+                                        355,
+                                        479
+                                    ],
+                                    "type": "text",
+                                    "content": "二等奖"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 11
+                },
+                {
+                    "type": "image",
+                    "bbox": [
+                        137,
+                        505,
+                        213,
+                        577
+                    ],
+                    "blocks": [
+                        {
+                            "bbox": [
+                                137,
+                                505,
+                                213,
+                                577
+                            ],
+                            "lines": [
+                                {
+                                    "bbox": [
+                                        137,
+                                        505,
+                                        213,
+                                        577
+                                    ],
+                                    "spans": [
+                                        {
+                                            "bbox": [
+                                                137,
+                                                505,
+                                                213,
+                                                577
+                                            ],
+                                            "type": "image",
+                                            "image_path": "08d6bcb3f213711a66221a5349cb20013d3537846df65f32b5fb31c3d0c1da47.jpg"
+                                        }
+                                    ]
+                                }
+                            ],
+                            "index": 12,
+                            "angle": 0,
+                            "type": "image_body"
+                        }
+                    ],
+                    "index": 12
+                },
+                {
+                    "type": "image",
+                    "bbox": [
+                        217,
+                        506,
+                        288,
+                        577
+                    ],
+                    "blocks": [
+                        {
+                            "bbox": [
+                                217,
+                                506,
+                                288,
+                                577
+                            ],
+                            "lines": [
+                                {
+                                    "bbox": [
+                                        217,
+                                        506,
+                                        288,
+                                        577
+                                    ],
+                                    "spans": [
+                                        {
+                                            "bbox": [
+                                                217,
+                                                506,
+                                                288,
+                                                577
+                                            ],
+                                            "type": "image",
+                                            "image_path": "608ce7a892f2b0e0598b5139b284f2ab12c7acaa7e9a32c93e26843633c26964.jpg"
+                                        }
+                                    ]
+                                }
+                            ],
+                            "index": 13,
+                            "angle": 0,
+                            "type": "image_body"
+                        }
+                    ],
+                    "index": 13
+                },
+                {
+                    "type": "image",
+                    "bbox": [
+                        294,
+                        506,
+                        377,
+                        571
+                    ],
+                    "blocks": [
+                        {
+                            "bbox": [
+                                294,
+                                506,
+                                377,
+                                571
+                            ],
+                            "lines": [
+                                {
+                                    "bbox": [
+                                        294,
+                                        506,
+                                        377,
+                                        571
+                                    ],
+                                    "spans": [
+                                        {
+                                            "bbox": [
+                                                294,
+                                                506,
+                                                377,
+                                                571
+                                            ],
+                                            "type": "image",
+                                            "image_path": "cf2909f7b63dbae966d4e8aeb690c3d432aa6d6ed2599084ac55e20f2ce51828.jpg"
+                                        }
+                                    ]
+                                }
+                            ],
+                            "index": 14,
+                            "angle": 0,
+                            "type": "image_body"
+                        }
+                    ],
+                    "index": 14
+                },
+                {
+                    "type": "image",
+                    "bbox": [
+                        383,
+                        506,
+                        454,
+                        577
+                    ],
+                    "blocks": [
+                        {
+                            "bbox": [
+                                383,
+                                506,
+                                454,
+                                577
+                            ],
+                            "lines": [
+                                {
+                                    "bbox": [
+                                        383,
+                                        506,
+                                        454,
+                                        577
+                                    ],
+                                    "spans": [
+                                        {
+                                            "bbox": [
+                                                383,
+                                                506,
+                                                454,
+                                                577
+                                            ],
+                                            "type": "image",
+                                            "image_path": "2bf063c7398e2da17857d4dc757d7e296f3a167354ae9e11af85a81819b09b2f.jpg"
+                                        }
+                                    ]
+                                }
+                            ],
+                            "index": 15,
+                            "angle": 0,
+                            "type": "image_body"
+                        }
+                    ],
+                    "index": 15
+                },
+                {
+                    "bbox": [
+                        142,
+                        585,
+                        217,
+                        594
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                142,
+                                585,
+                                217,
+                                594
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        142,
+                                        585,
+                                        217,
+                                        594
+                                    ],
+                                    "type": "text",
+                                    "content": "编号：E2024201707"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 16
+                },
+                {
+                    "bbox": [
+                        390,
+                        585,
+                        447,
+                        594
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                390,
+                                585,
+                                447,
+                                594
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        390,
+                                        585,
+                                        447,
+                                        594
+                                    ],
+                                    "type": "text",
+                                    "content": "二〇二四年十二月"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 17
+                }
+            ],
+            "discarded_blocks": [],
+            "page_size": [
+                595,
+                841
+            ],
+            "page_idx": 0
+        },
+        {
+            "para_blocks": [
+                {
+                    "bbox": [
+                        258,
+                        132,
+                        353,
+                        153
+                    ],
+                    "type": "title",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                258,
+                                132,
+                                353,
+                                153
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        258,
+                                        132,
+                                        353,
+                                        153
+                                    ],
+                                    "type": "text",
+                                    "content": "获奖证书"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 0
+                },
+                {
+                    "bbox": [
+                        265,
+                        157,
+                        347,
+                        165
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                265,
+                                157,
+                                347,
+                                165
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        265,
+                                        157,
+                                        347,
+                                        165
+                                    ],
+                                    "type": "text",
+                                    "content": "certificate of award"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 1
+                },
+                {
+                    "bbox": [
+                        145,
+                        182,
+                        446,
+                        223
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                145,
+                                182,
+                                446,
+                                223
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        145,
+                                        182,
+                                        446,
+                                        223
+                                    ],
+                                    "type": "text",
+                                    "content": "新疆大学的参赛作品《基于深度学习的高速公路拥堵预测及应急车道启用模型研究》，在2025年（第十一届）全国大学生统计建模大赛新疆赛区赛区选拔赛中，荣获研究生组一等奖。"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 2
+                },
+                {
+                    "bbox": [
+                        146,
+                        257,
+                        296,
+                        269
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                146,
+                                257,
+                                296,
+                                269
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        146,
+                                        257,
+                                        296,
+                                        269
+                                    ],
+                                    "type": "text",
+                                    "content": "参赛队员：靳凌霄、陈欣宜、左燕妮"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 3
+                },
+                {
+                    "bbox": [
+                        147,
+                        273,
+                        224,
+                        285
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                147,
+                                273,
+                                224,
+                                285
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        147,
+                                        273,
+                                        224,
+                                        285
+                                    ],
+                                    "type": "text",
+                                    "content": "指导老师：刘淑娴"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 4
+                },
+                {
+                    "bbox": [
+                        130,
+                        304,
+                        226,
+                        315
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                130,
+                                304,
+                                226,
+                                315
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        130,
+                                        304,
+                                        226,
+                                        315
+                                    ],
+                                    "type": "text",
+                                    "content": "证书编号：20253802A0004"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 5
+                },
+                {
+                    "type": "image",
+                    "bbox": [
+                        399,
+                        276,
+                        466,
+                        327
+                    ],
+                    "blocks": [
+                        {
+                            "bbox": [
+                                399,
+                                276,
+                                466,
+                                327
+                            ],
+                            "lines": [
+                                {
+                                    "bbox": [
+                                        399,
+                                        276,
+                                        466,
+                                        327
+                                    ],
+                                    "spans": [
+                                        {
+                                            "bbox": [
+                                                399,
+                                                276,
+                                                466,
+                                                327
+                                            ],
+                                            "type": "image",
+                                            "image_path": "dc65bdcb282e42b14cd30c45e84f627df092f5632fa7ddfa943de6679d447c03.jpg"
+                                        }
+                                    ]
+                                }
+                            ],
+                            "index": 6,
+                            "angle": 0,
+                            "type": "image_body"
+                        }
+                    ],
+                    "index": 6
+                }
+            ],
+            "discarded_blocks": [],
+            "page_size": [
+                595,
+                841
+            ],
+            "page_idx": 1
+        },
+        {
+            "para_blocks": [
+                {
+                    "bbox": [
+                        132,
+                        85,
+                        431,
+                        106
+                    ],
+                    "type": "title",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                132,
+                                85,
+                                431,
+                                106
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        132,
+                                        85,
+                                        431,
+                                        106
+                                    ],
+                                    "type": "text",
+                                    "content": "全国大学英语四级考试(CET4)成绩详情"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 0
+                },
+                {
+                    "bbox": [
+                        101,
+                        144,
+                        209,
+                        161
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                101,
+                                144,
+                                209,
+                                161
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        101,
+                                        144,
+                                        209,
+                                        161
+                                    ],
+                                    "type": "text",
+                                    "content": "姓名：靳凌霄"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 1
+                },
+                {
+                    "bbox": [
+                        101,
+                        169,
+                        302,
+                        185
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                101,
+                                169,
+                                302,
+                                185
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        101,
+                                        169,
+                                        302,
+                                        185
+                                    ],
+                                    "type": "text",
+                                    "content": "证件号码：410326199908245014"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 2
+                },
+                {
+                    "bbox": [
+                        101,
+                        195,
+                        246,
+                        211
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                101,
+                                195,
+                                246,
+                                211
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        101,
+                                        195,
+                                        246,
+                                        211
+                                    ],
+                                    "type": "text",
+                                    "content": "学校：南阳理工学院"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 3
+                },
+                {
+                    "bbox": [
+                        255,
+                        231,
+                        308,
+                        247
+                    ],
+                    "type": "title",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                255,
+                                231,
+                                308,
+                                247
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        255,
+                                        231,
+                                        308,
+                                        247
+                                    ],
+                                    "type": "text",
+                                    "content": "笔试成绩"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 4
+                },
+                {
+                    "bbox": [
+                        101,
+                        260,
+                        280,
+                        275
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                101,
+                                260,
+                                280,
+                                275
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        101,
+                                        260,
+                                        280,
+                                        275
+                                    ],
+                                    "type": "text",
+                                    "content": "准考证号：418510211114302"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 5
+                },
+                {
+                    "bbox": [
+                        102,
+                        285,
+                        194,
+                        301
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                102,
+                                285,
+                                194,
+                                301
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        102,
+                                        285,
+                                        194,
+                                        301
+                                    ],
+                                    "type": "text",
+                                    "content": "总 分: 459"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 6
+                },
+                {
+                    "bbox": [
+                        165,
+                        306,
+                        268,
+                        322
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                165,
+                                306,
+                                268,
+                                322
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        165,
+                                        306,
+                                        268,
+                                        322
+                                    ],
+                                    "type": "text",
+                                    "content": "听力：158"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 7
+                },
+                {
+                    "bbox": [
+                        165,
+                        333,
+                        268,
+                        348
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                165,
+                                333,
+                                268,
+                                348
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        165,
+                                        333,
+                                        268,
+                                        348
+                                    ],
+                                    "type": "text",
+                                    "content": "阅 读：167"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 8
+                },
+                {
+                    "bbox": [
+                        165,
+                        358,
+                        268,
+                        373
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                165,
+                                358,
+                                268,
+                                373
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        165,
+                                        358,
+                                        268,
+                                        373
+                                    ],
+                                    "type": "text",
+                                    "content": "写作和翻译：134"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 9
+                },
+                {
+                    "bbox": [
+                        255,
+                        386,
+                        308,
+                        401
+                    ],
+                    "type": "title",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                255,
+                                386,
+                                308,
+                                401
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        255,
+                                        386,
+                                        308,
+                                        401
+                                    ],
+                                    "type": "text",
+                                    "content": "口试成绩"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 10
+                },
+                {
+                    "bbox": [
+                        101,
+                        415,
+                        180,
+                        429
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                101,
+                                415,
+                                180,
+                                429
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        101,
+                                        415,
+                                        180,
+                                        429
+                                    ],
+                                    "type": "text",
+                                    "content": "准考证号：--"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 11
+                },
+                {
+                    "bbox": [
+                        101,
+                        440,
+                        180,
+                        454
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                101,
+                                440,
+                                180,
+                                454
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        101,
+                                        440,
+                                        180,
+                                        454
+                                    ],
+                                    "type": "text",
+                                    "content": "等级：--"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 12
+                },
+                {
+                    "bbox": [
+                        101,
+                        479,
+                        317,
+                        494
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                101,
+                                479,
+                                317,
+                                494
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        101,
+                                        479,
+                                        317,
+                                        494
+                                    ],
+                                    "type": "text",
+                                    "content": "成绩报告单编号：211141851003488"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 13
+                },
+                {
+                    "bbox": [
+                        117,
+                        520,
+                        446,
+                        553
+                    ],
+                    "type": "text",
+                    "angle": 0,
+                    "lines": [
+                        {
+                            "bbox": [
+                                117,
+                                520,
+                                446,
+                                553
+                            ],
+                            "spans": [
+                                {
+                                    "bbox": [
+                                        117,
+                                        520,
+                                        446,
+                                        553
+                                    ],
+                                    "type": "text",
+                                    "content": "您在报名期间已选择需要纸质成绩报告单（证书），8月27日9时- 8月31日17时可再次登录报名网站进行修改。"
+                                }
+                            ]
+                        }
+                    ],
+                    "index": 14
+                }
+            ],
+            "discarded_blocks": [],
+            "page_size": [
+                595,
+                841
+            ],
+            "page_idx": 2
+        }
+    ],
+    "_backend": "hybrid",
+    "_ocr_enable": true,
+    "_vlm_ocr_enable": true,
+    "_version_name": "2.7.6"
+}

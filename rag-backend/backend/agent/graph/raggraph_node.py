@@ -24,6 +24,8 @@ import asyncio
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from urllib.parse import urlparse, unquote
+from backend.config.oss import get_presigned_url_for_download
 
 class RAGNodes:
     """RAG图节点实现类
@@ -681,7 +683,7 @@ class RAGNodes:
 
             # 创建混合检索器
             hybrid_retriever = self.milvus_storage.create_hybrid_retriever(
-                search_kwargs={"k": max_docs}
+                search_kwargs={"k": max(max_docs * 2, 6)}
             )
 
             # 收集所有需要检索的问题
@@ -739,9 +741,22 @@ class RAGNodes:
 
             self.logger.info(f"去重后文档数: {len(unique_docs)}")
 
-            # 更新状态
-            state["retrieved_docs"] = unique_docs
-            state["vector_db_results"] = unique_docs
+            text_docs = [doc for doc in unique_docs if doc.metadata.get("chunk_type") != "chart"]
+            chart_docs = [doc for doc in unique_docs if doc.metadata.get("chunk_type") == "chart"]
+
+            max_chart_docs = 2 if max_docs >= 2 else 1
+            selected_text_docs = text_docs[:max_docs]
+            selected_chart_docs = chart_docs[:max_chart_docs]
+            fused_docs = selected_text_docs + selected_chart_docs
+            if not fused_docs:
+                fused_docs = unique_docs[:max_docs]
+
+            self.logger.info(
+                f"融合检索结果: 文本 {len(selected_text_docs)} 条, 图表 {len(selected_chart_docs)} 条, 总计 {len(fused_docs)} 条"
+            )
+
+            state["retrieved_docs"] = fused_docs
+            state["vector_db_results"] = fused_docs
 
         except Exception as e:
             self.logger.error(f"向量检索失败: {e}")
@@ -873,17 +888,40 @@ class RAGNodes:
                     content_preview = doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content
                 else:
                     content_preview = doc.page_content[:400] + "..." if len(doc.page_content) > 400 else doc.page_content
-                
+                chart_image_url = doc.metadata.get("chart_image_url")
+                if chart_image_url:
+                    try:
+                        parsed = urlparse(chart_image_url.strip().strip("`"))
+                        host = parsed.netloc or ""
+                        if "aliyuncs.com" in host:
+                            path = (parsed.path or "").lstrip("/")
+                            bucket = host.split(".")[0] if host else None
+                            if not bucket or bucket.startswith("oss"):
+                                if "/" in path:
+                                    bucket, path = path.split("/", 1)
+                            key = unquote(path)
+                            if bucket and key:
+                                presign = get_presigned_url_for_download(bucket=bucket, key=key)
+                                if presign and presign.get("url"):
+                                    chart_image_url = presign.get("url")
+                    except Exception:
+                        pass
+
                 source_info = {
                     "index": i + 1,
                     "document_name": doc.metadata.get("document_name", f"文档{i+1}"),
                     "content": content_preview,
                     "chunk_index": doc.metadata.get("chunk_index"),
                     "retrieval_mode": retrieval_source,
-                    "content_length": len(doc.page_content)
+                    "content_length": len(doc.page_content),
+                    "chunk_type": doc.metadata.get("chunk_type", "text"),
+                    "chart_id": doc.metadata.get("chart_id"),
+                    "chart_image_url": chart_image_url,
+                    "section_title": doc.metadata.get("section_title"),
+                    "page_number": doc.metadata.get("page_number")
                 }
                 sources.append(source_info)
-            
+
             # 更新状态
             state["final_answer"] = answer_content
             state["answer_sources"] = sources

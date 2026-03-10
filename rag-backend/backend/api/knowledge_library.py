@@ -137,21 +137,26 @@ async def get_upload_url(
     try:
         logger.info(f"用户 {current_user} 请求获取上传URL: {request.document_name}")
         if not request.document_name:
-            raise HTTPException(status_code=400, detail="document_name不能为空")
+            return Response.error("document_name不能为空")
 
-        from backend.config.oss import get_presigned_url_for_upload
+        from backend.config.oss import get_presigned_url_for_upload, get_presigned_url_for_download
 
         bucket = os.getenv("OSS_BUCKET_FILE", os.getenv("OSS_BUCKET_NAME", "ragagent-file"))
         key = f"user_{current_user}/{int(time.time())}_{request.document_name}"
         presign = get_presigned_url_for_upload(bucket=bucket, key=key)
+        if not presign or not presign.get("url"):
+            logger.error("获取上传URL失败: OSS返回空签名")
+            return Response.error("获取上传URL失败: OSS签名为空")
 
+        download_presign = get_presigned_url_for_download(bucket=bucket, key=key)
         return Response.success({
             "url": presign.get("url"),
             "method": presign.get("method", "PUT"),
-            "signed_headers": presign.get("signed_headers", {})
+            "signed_headers": presign.get("signed_headers", {}),
+            "object_key": key,
+            "bucket": bucket,
+            "download_url": download_presign.get("url") if download_presign else None
         })
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"获取上传URL失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"获取上传URL失败: {str(e)}")
+        return Response.error(f"获取上传URL失败: {str(e)}")

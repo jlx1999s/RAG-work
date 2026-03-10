@@ -5,15 +5,18 @@
 专门处理用户上传的文档（与爬虫逻辑完全分离）
 """
 import os
-from typing import Optional, Dict, Any
+import re
+from typing import Optional, Dict, Any, List, Tuple
 import tempfile
+from urllib.parse import urljoin
+from langchain_core.documents import Document
 from backend.config.log import get_logger
 from backend.config.oss import OssClientFactory
 from backend.rag.storage.milvus_storage import MilvusStorage
 from backend.rag.storage.lightrag_storage import LightRAGStorage
 from backend.rag.chunks.document_extraction import DocumentExtractor
 from backend.rag.chunks.chunks import TextChunker
-from backend.rag.chunks.models import ChunkConfig, ChunkStrategy, DocumentContent
+from backend.rag.chunks.models import ChunkConfig, ChunkStrategy, DocumentContent, ChunkResult
 
 logger = get_logger(__name__)
 
@@ -76,23 +79,31 @@ class DocumentProcessor:
             
             # 2. 文档分块
             chunks_result = await self._chunk_document(content, document_name, file_type)
+            chart_chunks_result = self._build_chart_chunks(content, document_name, source_url)
+            all_chunk_results = [chunks_result]
+            if chart_chunks_result.total_chunks > 0:
+                all_chunk_results.append(chart_chunks_result)
             
             if not chunks_result or not chunks_result.chunks:
                 raise ValueError(f"文档分块结果为空: {document_name}")
             
-            chunk_count = len(chunks_result.chunks)
-            logger.info(f"文档分块完成，共 {chunk_count} 个 chunks")
+            text_chunk_count = len(chunks_result.chunks)
+            chart_chunk_count = chart_chunks_result.total_chunks
+            chunk_count = text_chunk_count + chart_chunk_count
+            logger.info(f"文档分块完成，文本块: {text_chunk_count}, 图表块: {chart_chunk_count}")
             
             # 3. 存储到 Milvus
-            await self._store_to_milvus(chunks_result, document_name)
+            await self._store_to_milvus(all_chunk_results, document_name)
             
             # 4. 构建知识图谱（LightRAG + Neo4j）
-            await self._build_knowledge_graph(chunks_result, document_name)
+            await self._build_knowledge_graph(all_chunk_results, document_name)
             
             result = {
                 "status": "success",
                 "document_name": document_name,
                 "chunk_count": chunk_count,
+                "text_chunk_count": text_chunk_count,
+                "chart_chunk_count": chart_chunk_count,
                 "message": f"文档处理完成：{chunk_count} 个分块已入库"
             }
             
@@ -138,20 +149,28 @@ class DocumentProcessor:
             
             # 2. 文档分块
             chunks_result = await self._chunk_document(content, document_name, file_type)
+            chart_chunks_result = self._build_chart_chunks(content, document_name, source_url)
+            all_chunk_results = [chunks_result]
+            if chart_chunks_result.total_chunks > 0:
+                all_chunk_results.append(chart_chunks_result)
             
             if not chunks_result or not chunks_result.chunks:
                 raise ValueError(f"文档分块结果为空: {document_name}")
             
-            chunk_count = len(chunks_result.chunks)
-            logger.info(f"文档分块完成，共 {chunk_count} 个 chunks")
+            text_chunk_count = len(chunks_result.chunks)
+            chart_chunk_count = chart_chunks_result.total_chunks
+            chunk_count = text_chunk_count + chart_chunk_count
+            logger.info(f"文档分块完成，文本块: {text_chunk_count}, 图表块: {chart_chunk_count}")
             
             # 3. 存储到 Milvus
-            await self._store_to_milvus(chunks_result, document_name)
+            await self._store_to_milvus(all_chunk_results, document_name)
             
             result = {
                 "status": "success",
                 "document_name": document_name,
                 "chunk_count": chunk_count,
+                "text_chunk_count": text_chunk_count,
+                "chart_chunk_count": chart_chunk_count,
                 "message": f"向量化完成：{chunk_count} 个分块已入库"
             }
             
@@ -197,20 +216,28 @@ class DocumentProcessor:
             
             # 2. 文档分块
             chunks_result = await self._chunk_document(content, document_name, file_type)
+            chart_chunks_result = self._build_chart_chunks(content, document_name, source_url)
+            all_chunk_results = [chunks_result]
+            if chart_chunks_result.total_chunks > 0:
+                all_chunk_results.append(chart_chunks_result)
             
             if not chunks_result or not chunks_result.chunks:
                 raise ValueError(f"文档分块结果为空: {document_name}")
             
-            chunk_count = len(chunks_result.chunks)
-            logger.info(f"文档分块完成，共 {chunk_count} 个 chunks")
+            text_chunk_count = len(chunks_result.chunks)
+            chart_chunk_count = chart_chunks_result.total_chunks
+            chunk_count = text_chunk_count + chart_chunk_count
+            logger.info(f"文档分块完成，文本块: {text_chunk_count}, 图表块: {chart_chunk_count}")
             
             # 3. 构建知识图谱
-            await self._build_knowledge_graph(chunks_result, document_name)
+            await self._build_knowledge_graph(all_chunk_results, document_name)
             
             result = {
                 "status": "success",
                 "document_name": document_name,
                 "chunk_count": chunk_count,
+                "text_chunk_count": text_chunk_count,
+                "chart_chunk_count": chart_chunk_count,
                 "message": f"图谱化完成：{chunk_count} 个分块已入图"
             }
             
@@ -249,27 +276,47 @@ class DocumentProcessor:
             
             raw_bytes = result.body.read()
             normalized_type = (file_type or "").lower()
-            if normalized_type in {"pdf", "doc", "docx"}:
-                extractor = DocumentExtractor()
-                suffix = f".{normalized_type}" if normalized_type else ""
+            extractor = DocumentExtractor()
+            detected_type = None
+            if raw_bytes.startswith(b"%PDF"):
+                detected_type = "pdf"
+            elif raw_bytes.startswith(b"PK"):
+                detected_type = "docx"
+            elif raw_bytes[:4] == b"\xD0\xCF\x11\xE0":
+                detected_type = "doc"
+            if normalized_type in {"pdf", "doc", "docx"} or detected_type:
+                effective_type = normalized_type if normalized_type in {"pdf", "doc", "docx"} else detected_type
+                suffix = f".{effective_type}" if effective_type else ""
                 with tempfile.NamedTemporaryFile(delete=True, suffix=suffix) as temp_file:
                     temp_file.write(raw_bytes)
                     temp_file.flush()
                     parsed = extractor.read_document(temp_file.name)
                     content = parsed.content
-                if normalized_type == "pdf" and (not content or not content.strip()):
+                if effective_type == "pdf" and (not content or not content.strip()):
                     mineru_url = os.getenv("MINERU_API_URL")
                     mineru_key = os.getenv("MINERU_API_KEY")
-                    if source_url and mineru_url and mineru_key:
+                    if mineru_url and mineru_key:
+                        target_url = source_url
                         try:
-                            parsed = extractor.read_document(source_url, pdf_extract_method="mineru")
-                            content = parsed.content
-                        except Exception as mineru_error:
-                            logger.warning(f"MinerU 解析失败: {source_url}, 错误: {str(mineru_error)}")
+                            from backend.config.oss import get_presigned_url_for_download
+                            presign = get_presigned_url_for_download(bucket=bucket, key=decoded_key)
+                            if presign and presign.get("url"):
+                                target_url = presign.get("url")
+                        except Exception as presign_error:
+                            logger.warning(f"生成下载URL失败: {bucket}/{decoded_key}, 错误: {str(presign_error)}")
+                        if target_url:
+                            try:
+                                parsed = extractor.read_document(target_url, pdf_extract_method="mineru")
+                                content = parsed.content
+                            except Exception as mineru_error:
+                                logger.warning(f"MinerU 解析失败: {target_url}, 错误: {str(mineru_error)}")
             else:
-                content = raw_bytes.decode("utf-8")
+                try:
+                    content = raw_bytes.decode("utf-8")
+                except UnicodeDecodeError:
+                    content = raw_bytes.decode("utf-8", errors="ignore")
             
-            logger.info(f"成功从 OSS 读取: {bucket}/{decoded_key}, 大小: {len(content)} bytes")
+            logger.info(f"成功从 OSS 读取: {bucket}/{decoded_key}, 文件大小: {len(raw_bytes)} bytes, 内容长度: {len(content)}")
             return content
             
         except Exception as e:
@@ -310,6 +357,11 @@ class DocumentProcessor:
             
             # 执行分块
             result = self.chunker.chunk_document(document, chunk_config)
+            for chunk in result.chunks:
+                chunk.metadata = {
+                    "chunk_type": "text",
+                    "source": "vector"
+                }
             
             logger.info(f"文档分块完成: {document_name}, 策略: {strategy.value}")
             return result
@@ -318,7 +370,98 @@ class DocumentProcessor:
             logger.error(f"文档分块失败: {document_name}, 错误: {str(e)}")
             raise
     
-    async def _store_to_milvus(self, chunks_result: Any, document_name: str):
+    def _extract_headings(self, content: str) -> List[Tuple[int, str]]:
+        heading_matches = list(re.finditer(r"^#{1,6}\s+(.+)$", content, flags=re.MULTILINE))
+        return [(match.start(), match.group(1).strip()) for match in heading_matches]
+
+    def _find_closest_heading(self, headings: List[Tuple[int, str]], position: int) -> str:
+        section_title = "未标注章节"
+        for heading_pos, heading_title in headings:
+            if heading_pos > position:
+                break
+            section_title = heading_title
+        return section_title
+
+    def _normalize_image_url(self, image_url: str, source_url: Optional[str]) -> str:
+        if image_url.startswith(("http://", "https://")):
+            return image_url
+        if source_url:
+            return urljoin(source_url, image_url)
+        return image_url
+
+    def _extract_page_number(self, context_text: str) -> Optional[int]:
+        page_match = re.search(r"第\s*(\d+)\s*页|(?:P|p|Page)\s*[:：]?\s*(\d+)", context_text)
+        if not page_match:
+            return None
+        page_value = page_match.group(1) or page_match.group(2)
+        if not page_value:
+            return None
+        return int(page_value)
+
+    def _sanitize_context(self, raw_text: str) -> str:
+        cleaned = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", raw_text)
+        cleaned = re.sub(r"<img[^>]+>", "", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned
+
+    def _generate_chart_caption(self, alt_text: str, section_title: str, context_text: str) -> str:
+        context = self._sanitize_context(context_text)
+        context = context[:260] if context else ""
+        alt = (alt_text or "").strip()
+        if alt and context:
+            return f"{section_title}；图示主题：{alt}；相关内容：{context}"
+        if context:
+            return f"{section_title}；相关内容：{context}"
+        if alt:
+            return f"{section_title}；图示主题：{alt}"
+        return f"{section_title}；图表内容待补充"
+
+    def _build_chart_chunks(self, content: str, document_name: str, source_url: Optional[str]) -> ChunkResult:
+        headings = self._extract_headings(content)
+        markdown_pattern = r"!\[(?P<alt>[^\]]*)\]\((?P<url>[^)\s]+)(?:\s+\"[^\"]*\")?\)"
+        html_pattern = r"<img[^>]*src=[\"'](?P<url>[^\"']+)[\"'][^>]*>"
+        all_matches = []
+        all_matches.extend([("markdown", m) for m in re.finditer(markdown_pattern, content)])
+        all_matches.extend([("html", m) for m in re.finditer(html_pattern, content, flags=re.IGNORECASE)])
+        all_matches.sort(key=lambda item: item[1].start())
+        chunks: List[Document] = []
+        for idx, (_, match) in enumerate(all_matches, start=1):
+            image_url = match.group("url").strip()
+            alt_text = match.groupdict().get("alt", "").strip() if match.groupdict() else ""
+            normalized_image_url = self._normalize_image_url(image_url, source_url)
+            start = max(0, match.start() - 320)
+            end = min(len(content), match.end() + 320)
+            context_text = content[start:end]
+            section_title = self._find_closest_heading(headings, match.start())
+            page_number = self._extract_page_number(context_text)
+            chart_id = f"{document_name}#chart-{idx}"
+            caption = self._generate_chart_caption(alt_text, section_title, context_text)
+            page_text = str(page_number) if page_number is not None else "未知"
+            chunk_text = (
+                f"图表ID: {chart_id}\n"
+                f"所属章节: {section_title}\n"
+                f"页码: {page_text}\n"
+                f"图表摘要: {caption}\n"
+                f"图表地址: {normalized_image_url}"
+            )
+            metadata = {
+                "chunk_type": "chart",
+                "source": "vector_chart",
+                "chart_id": chart_id,
+                "chart_image_url": normalized_image_url,
+                "section_title": section_title,
+                "page_number": page_number,
+                "chart_caption": caption
+            }
+            chunks.append(Document(page_content=chunk_text, metadata=metadata))
+        return ChunkResult(
+            chunks=chunks,
+            strategy=ChunkStrategy.RECURSIVE,
+            total_chunks=len(chunks),
+            document_name=document_name
+        )
+
+    async def _store_to_milvus(self, chunk_results: List[Any], document_name: str):
         """将分块存储到 Milvus
         
         Args:
@@ -326,7 +469,7 @@ class DocumentProcessor:
             document_name: 文档名称
         """
         try:
-            result = self.milvus_storage.store_chunks_batch([chunks_result])
+            result = self.milvus_storage.store_chunks_batch(chunk_results)
             
             logger.info(
                 f"成功存储到 Milvus: {document_name}, "
@@ -338,7 +481,7 @@ class DocumentProcessor:
             logger.error(f"Milvus 存储失败: {document_name}, 错误: {str(e)}")
             raise Exception(f"向量存储失败: {str(e)}")
     
-    async def _build_knowledge_graph(self, chunks_result: Any, document_name: str):
+    async def _build_knowledge_graph(self, chunk_results: List[Any], document_name: str):
         """构建知识图谱（LightRAG + Neo4j）
         
         Args:
@@ -347,7 +490,9 @@ class DocumentProcessor:
         """
         try:
             # 提取所有 chunk 的文本内容
-            text_chunks = [chunk.page_content for chunk in chunks_result.chunks]
+            text_chunks = []
+            for chunk_result in chunk_results:
+                text_chunks.extend([chunk.page_content for chunk in chunk_result.chunks])
             
             # 初始化 LightRAG（如果尚未初始化）
             if self.lightrag_storage.rag is None:

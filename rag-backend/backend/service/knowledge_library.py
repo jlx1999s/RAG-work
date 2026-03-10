@@ -632,19 +632,29 @@ async def _process_uploaded_file(url: str, collection_id: str, document_name: st
         
         logger.info(f"解析 OSS 参数: bucket={oss_bucket}, key={oss_key}")
         
-        # 检测文件类型
+        # 检测文件类型（避免URL带查询参数导致后缀判断失败）
         file_type = "md"
-        url_lower = url.lower()
-        if url_lower.endswith((".md", ".markdown")):
-            file_type = "md"
-        elif url_lower.endswith(".txt"):
-            file_type = "txt"
-        elif url_lower.endswith(".pdf"):
-            file_type = "pdf"
-        elif url_lower.endswith(".doc"):
-            file_type = "doc"
-        elif url_lower.endswith(".docx"):
-            file_type = "docx"
+        parsed_url = urlparse(url)
+        path_lower = (parsed_url.path or "").lower()
+        key_lower = (oss_key or "").lower()
+        name_lower = (document_name or "").lower()
+        type_candidates = [path_lower, key_lower, name_lower]
+        for candidate in type_candidates:
+            if candidate.endswith((".md", ".markdown")):
+                file_type = "md"
+                break
+            if candidate.endswith(".txt"):
+                file_type = "txt"
+                break
+            if candidate.endswith(".pdf"):
+                file_type = "pdf"
+                break
+            if candidate.endswith(".docx"):
+                file_type = "docx"
+                break
+            if candidate.endswith(".doc"):
+                file_type = "doc"
+                break
         
         # 使用新的文档处理器，根据模式调用
         vectorize_only = (mode == "vectorize")
