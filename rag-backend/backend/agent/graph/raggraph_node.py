@@ -22,7 +22,9 @@ from backend.agent.tools.exceptions import (
 from backend.agent.tools.audit import get_audit_logger
 import asyncio
 import json
+import os
 import time
+import math
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from urllib.parse import urlparse, unquote
 from backend.config.oss import get_presigned_url_for_download
@@ -55,6 +57,11 @@ class RAGNodes:
         self.logger = get_logger(__name__)
         self.tool_timeout = 30.0  # 工具执行超时（30秒）
         self.executor = ThreadPoolExecutor(max_workers=5)  # 线程池用于超时控制
+        self.rrf_k = float(os.getenv("RAG_RRF_K", "60"))
+        self.graph_source_weight = float(os.getenv("RAG_GRAPH_SOURCE_WEIGHT", "1.1"))
+        self.vector_source_weight = float(os.getenv("RAG_VECTOR_SOURCE_WEIGHT", "1.0"))
+        self.mmr_lambda = float(os.getenv("RAG_MMR_LAMBDA", "0.75"))
+        self.enable_semantic_rerank = os.getenv("RAG_ENABLE_SEMANTIC_RERANK", "true").lower() in {"true", "1", "yes", "on"}
     
     def _execute_tool_with_timeout(self, tool, tool_args, timeout=None):
         """带超时控制的工具执行
@@ -597,6 +604,8 @@ class RAGNodes:
         # 如果是AUTO模式，调用LLM进行智能判断
         if state["retrieval_mode"] == RetrievalMode.AUTO:
             self.logger.info("AUTO模式，开始智能判断检索类型...")
+            state["retrieval_mode"] = RetrievalMode.VECTOR_ONLY
+            state["retrieval_mode_reason"] = "AUTO模式默认向量检索"
 
             try:
                 # 获取原始问题
@@ -621,13 +630,17 @@ class RAGNodes:
                     structured_llm = self.llm.with_structured_output(RetrievalTypeDecision)
                     decision = structured_llm.invoke(prompt)
                     state["retrieval_mode_reason"] = decision.reasoning
+                    retrieval_type = (decision.retrieval_type or "").strip().lower()
                     # 根据LLM判断结果更新检索模式
-                    if decision.retrieval_type == "vector_only":
+                    if retrieval_type == "vector_only":
                         state["retrieval_mode"] = RetrievalMode.VECTOR_ONLY
                         self.logger.info(f"LLM判断：使用向量检索 - {decision.reasoning}")
-                    elif decision.retrieval_type == "graph_only":
-                        state["retrieval_mode"] = RetrievalMode.GRAPH_ONLY
-                        self.logger.info(f"LLM判断：使用图检索 - {decision.reasoning}")
+                    elif retrieval_type == "hybrid":
+                        state["retrieval_mode"] = RetrievalMode.HYBRID
+                        self.logger.info(f"LLM判断：使用融合检索 - {decision.reasoning}")
+                    elif retrieval_type == "graph_only":
+                        state["retrieval_mode"] = RetrievalMode.HYBRID
+                        self.logger.info(f"LLM判断：graph_only已映射为融合检索 - {decision.reasoning}")
                     else:
                         self.logger.warning(f"未知的检索类型 {decision.retrieval_type}，默认使用向量检索")
                         state["retrieval_mode"] = RetrievalMode.VECTOR_ONLY
@@ -647,6 +660,264 @@ class RAGNodes:
 
         self.logger.info(f"最终检索模式: {state['retrieval_mode']}")
         return state
+
+    def _deduplicate_retrieved_docs(self, docs: list[RetrievedDocument]) -> list[RetrievedDocument]:
+        unique_docs = []
+        seen_keys = set()
+        for doc in docs:
+            metadata = doc.metadata or {}
+            pk = metadata.get("pk") or metadata.get("id")
+            if pk is not None:
+                key = ("pk", str(pk))
+            else:
+                document_name = metadata.get("document_name", "")
+                chunk_index = metadata.get("chunk_index", "")
+                key = ("fallback", str(document_name), str(chunk_index), doc.page_content[:80])
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            unique_docs.append(doc)
+        return unique_docs
+
+    def _is_near_duplicate(self, left: str, right: str) -> bool:
+        if not left or not right:
+            return False
+        normalized_left = "".join(ch.lower() for ch in left if not ch.isspace())
+        normalized_right = "".join(ch.lower() for ch in right if not ch.isspace())
+        if not normalized_left or not normalized_right:
+            return False
+        if normalized_left[:180] == normalized_right[:180]:
+            return True
+        left_set = set(normalized_left[:800])
+        right_set = set(normalized_right[:800])
+        if not left_set or not right_set:
+            return False
+        overlap = len(left_set & right_set)
+        union = len(left_set | right_set)
+        if union == 0:
+            return False
+        return (overlap / union) >= 0.92
+
+    def _deduplicate_semantic_docs(self, docs: list[RetrievedDocument]) -> list[RetrievedDocument]:
+        deduped_docs: list[RetrievedDocument] = []
+        for doc in docs:
+            is_dup = False
+            current_name = (doc.metadata or {}).get("document_name", "")
+            for existing_doc in deduped_docs:
+                existing_name = (existing_doc.metadata or {}).get("document_name", "")
+                if current_name and existing_name and current_name != existing_name:
+                    continue
+                if self._is_near_duplicate(doc.page_content, existing_doc.page_content):
+                    is_dup = True
+                    break
+            if not is_dup:
+                deduped_docs.append(doc)
+        return deduped_docs
+
+    def _extract_overlap_score(self, query_text: str, content: str) -> float:
+        if not query_text or not content:
+            return 0.0
+        query_tokens = set(ch.lower() for ch in query_text if not ch.isspace())
+        content_tokens = set(ch.lower() for ch in content[:1000] if not ch.isspace())
+        if not query_tokens:
+            return 0.0
+        overlap = len(query_tokens & content_tokens)
+        return overlap / len(query_tokens)
+
+    def _content_similarity(self, left: str, right: str) -> float:
+        if not left or not right:
+            return 0.0
+        left_tokens = set(ch.lower() for ch in left[:1000] if not ch.isspace())
+        right_tokens = set(ch.lower() for ch in right[:1000] if not ch.isspace())
+        if not left_tokens or not right_tokens:
+            return 0.0
+        inter = len(left_tokens & right_tokens)
+        union = len(left_tokens | right_tokens)
+        if union == 0:
+            return 0.0
+        return inter / union
+
+    def _mmr_select_docs(self, docs: list[RetrievedDocument], select_k: int) -> list[RetrievedDocument]:
+        if select_k <= 0 or not docs:
+            return []
+        candidate_docs = list(docs)
+        selected_docs: list[RetrievedDocument] = []
+        while candidate_docs and len(selected_docs) < select_k:
+            best_doc = None
+            best_score = None
+            for doc in candidate_docs:
+                relevance = float((doc.metadata or {}).get("rrf_score", 0.0))
+                if not selected_docs:
+                    mmr_score = relevance
+                else:
+                    redundancy = max(
+                        self._content_similarity(doc.page_content, selected.page_content)
+                        for selected in selected_docs
+                    )
+                    mmr_score = self.mmr_lambda * relevance - (1.0 - self.mmr_lambda) * redundancy
+                if best_score is None or mmr_score > best_score:
+                    best_score = mmr_score
+                    best_doc = doc
+            if best_doc is None:
+                break
+            selected_docs.append(best_doc)
+            candidate_docs.remove(best_doc)
+        return selected_docs
+
+    def _cosine_similarity(self, left: list[float], right: list[float]) -> float:
+        if not left or not right or len(left) != len(right):
+            return 0.0
+        dot_value = sum(l * r for l, r in zip(left, right))
+        left_norm = math.sqrt(sum(l * l for l in left))
+        right_norm = math.sqrt(sum(r * r for r in right))
+        if left_norm == 0.0 or right_norm == 0.0:
+            return 0.0
+        return dot_value / (left_norm * right_norm)
+
+    def _semantic_rerank_docs(self, query_text: str, docs: list[RetrievedDocument]) -> list[RetrievedDocument]:
+        if not self.enable_semantic_rerank or not self.embedding_model or not query_text or not docs:
+            return docs
+        try:
+            query_vector = self.embedding_model.embed_query(query_text)
+            doc_texts = [doc.page_content for doc in docs]
+            doc_vectors = self.embedding_model.embed_documents(doc_texts)
+            scored_docs = []
+            for doc, vector in zip(docs, doc_vectors):
+                semantic_score = self._cosine_similarity(query_vector, vector)
+                metadata = dict(doc.metadata or {})
+                metadata["semantic_score"] = round(semantic_score, 6)
+                scored_docs.append(
+                    RetrievedDocument(
+                        page_content=doc.page_content,
+                        metadata=metadata
+                    )
+                )
+            scored_docs.sort(
+                key=lambda d: (
+                    float((d.metadata or {}).get("semantic_score", 0.0)),
+                    float((d.metadata or {}).get("rrf_score", 0.0))
+                ),
+                reverse=True
+            )
+            return scored_docs
+        except Exception as exc:
+            self.logger.warning(f"语义重排失败，回退至RRF排序: {exc}")
+            return docs
+
+    def _split_graph_result_to_docs(self, content: str, max_docs: int) -> list[RetrievedDocument]:
+        stripped = (content or "").strip()
+        if not stripped:
+            return []
+        raw_segments = [seg.strip() for seg in stripped.split("\n\n") if seg.strip()]
+        if not raw_segments:
+            raw_segments = [stripped]
+        docs: list[RetrievedDocument] = []
+        limit = max(max_docs * 2, 4)
+        for idx, segment in enumerate(raw_segments[:limit]):
+            docs.append(
+                RetrievedDocument(
+                    page_content=segment,
+                    metadata={
+                        "source": "lightrag_graph",
+                        "retrieval_mode": "global",
+                        "document_name": "知识图谱检索结果",
+                        "chunk_index": idx,
+                        "rank_graph": idx + 1
+                    }
+                )
+            )
+        return docs
+
+    def _merge_retrieved_docs(
+        self,
+        vector_docs: list[RetrievedDocument],
+        graph_docs: list[RetrievedDocument],
+        max_docs: int,
+        query_text: str
+    ) -> list[RetrievedDocument]:
+        rrf_k = self.rrf_k
+        source_weights = {
+            "vector": self.vector_source_weight,
+            "graph": self.graph_source_weight
+        }
+        score_map: dict[tuple, float] = {}
+        doc_map: dict[tuple, RetrievedDocument] = {}
+        source_map: dict[tuple, set[str]] = {}
+
+        def doc_key(doc: RetrievedDocument) -> tuple:
+            metadata = doc.metadata or {}
+            pk = metadata.get("pk") or metadata.get("id")
+            if pk is not None:
+                return ("pk", str(pk))
+            return (
+                "fallback",
+                str(metadata.get("document_name", "")),
+                str(metadata.get("chunk_index", "")),
+                doc.page_content[:120]
+            )
+
+        def add_with_rrf(docs: list[RetrievedDocument], source_tag: str) -> None:
+            for rank_index, doc in enumerate(docs or []):
+                key = doc_key(doc)
+                score = source_weights[source_tag] * (1.0 / (rrf_k + rank_index + 1))
+                lexical_bonus = 0.08 * self._extract_overlap_score(query_text, doc.page_content)
+                total = score + lexical_bonus
+                score_map[key] = score_map.get(key, 0.0) + total
+                if key not in doc_map:
+                    doc_map[key] = doc
+                source_set = source_map.get(key, set())
+                source_set.add(source_tag)
+                source_map[key] = source_set
+
+        add_with_rrf(vector_docs, "vector")
+        add_with_rrf(graph_docs, "graph")
+
+        ranked_items = sorted(score_map.items(), key=lambda item: item[1], reverse=True)
+        ranked_docs: list[RetrievedDocument] = []
+        for rank_idx, (key, score) in enumerate(ranked_items):
+            doc = doc_map[key]
+            metadata = dict(doc.metadata or {})
+            metadata["rrf_score"] = round(score, 6)
+            metadata["fused_rank"] = rank_idx + 1
+            metadata["source"] = "hybrid_fused"
+            metadata["fused_sources"] = sorted(list(source_map.get(key, set())))
+            ranked_docs.append(RetrievedDocument(page_content=doc.page_content, metadata=metadata))
+
+        ranked_docs = self._deduplicate_retrieved_docs(ranked_docs)
+        ranked_docs = self._deduplicate_semantic_docs(ranked_docs)
+        ranked_docs = self._semantic_rerank_docs(query_text, ranked_docs)
+
+        text_docs = [doc for doc in ranked_docs if (doc.metadata or {}).get("chunk_type") != "chart"]
+        chart_docs = [doc for doc in ranked_docs if (doc.metadata or {}).get("chunk_type") == "chart"]
+
+        vector_text_docs = []
+        graph_text_docs = []
+        neutral_text_docs = []
+        for doc in text_docs:
+            fused_sources = set((doc.metadata or {}).get("fused_sources") or [])
+            if "graph" in fused_sources and "vector" in fused_sources:
+                neutral_text_docs.append(doc)
+            elif "graph" in fused_sources:
+                graph_text_docs.append(doc)
+            else:
+                vector_text_docs.append(doc)
+
+        candidate_text_docs: list[RetrievedDocument] = []
+        while vector_text_docs or graph_text_docs:
+            if vector_text_docs:
+                candidate_text_docs.append(vector_text_docs.pop(0))
+            if graph_text_docs:
+                candidate_text_docs.append(graph_text_docs.pop(0))
+        candidate_text_docs.extend(neutral_text_docs)
+        selected_text_docs = self._mmr_select_docs(candidate_text_docs, max_docs)
+
+        max_chart_docs = 2 if max_docs >= 2 else 1
+        selected_chart_docs = chart_docs[:max_chart_docs]
+
+        fused_docs = selected_text_docs + selected_chart_docs
+        if not fused_docs:
+            fused_docs = ranked_docs[:max_docs]
+        return fused_docs
 
     def vector_db_retrieval_node(self, state: RAGGraphState, runtime: Runtime[RAGContext]) -> RAGGraphState:
         """向量数据库检索节点
@@ -711,9 +982,11 @@ class RAGNodes:
             # 转换为RetrievedDocument格式
             converted_docs = []
             for doc in all_retrieved_docs:
+                metadata = dict(doc.metadata or {})
+                metadata["source"] = metadata.get("source") or "vector"
                 retrieved_doc = RetrievedDocument(
                     page_content=doc.page_content,
-                    metadata=doc.metadata
+                    metadata=metadata
                 )
                 converted_docs.append(retrieved_doc)
                 # 调试日志：查看每个文档的metadata
@@ -722,22 +995,7 @@ class RAGNodes:
                                f"content_length={len(doc.page_content)}, "
                                f"pk={doc.metadata.get('pk')}")
 
-            # 根据pk值进行去重处理
-            unique_docs = []
-            seen_pks = set()
-
-            for doc in converted_docs:
-                # 从metadata中获取pk值
-                pk = doc.metadata.get("pk") or doc.metadata.get("id")
-
-                if pk is not None:
-                    # 如果有pk值，检查是否已见过
-                    if pk not in seen_pks:
-                        seen_pks.add(pk)
-                        unique_docs.append(doc)
-                else:
-                    # 如果没有pk值，保留文档（但记录警告）
-                    unique_docs.append(doc)
+            unique_docs = self._deduplicate_retrieved_docs(converted_docs)
 
             self.logger.info(f"去重后文档数: {len(unique_docs)}")
 
@@ -756,7 +1014,7 @@ class RAGNodes:
             )
 
             state["retrieved_docs"] = fused_docs
-            state["vector_db_results"] = fused_docs
+            state["vector_db_results"] = unique_docs
 
         except Exception as e:
             self.logger.error(f"向量检索失败: {e}")
@@ -764,6 +1022,37 @@ class RAGNodes:
             state["retrieved_docs"] = []
             state["vector_db_results"] = []
 
+        return state
+
+    async def hybrid_retrieval_node(self, state: RAGGraphState, runtime: Runtime[RAGContext]) -> RAGGraphState:
+        self.logger.info("=" * 50)
+        self.logger.info("[RAG Graph] 节点: HYBRID_RETRIEVAL - 融合检索")
+
+        context = runtime.context
+        max_docs = context.max_retrieval_docs if context else 3
+
+        state = self.vector_db_retrieval_node(state, runtime)
+        vector_docs = list(state.get("vector_db_results") or [])
+
+        state = await self.graph_db_retrieval_node(state, runtime)
+        graph_docs = list(state.get("graph_db_results") or [])
+
+        query_text = state.get("original_question", "")
+        merged_docs = self._merge_retrieved_docs(vector_docs, graph_docs, max_docs, query_text)
+        state["retrieved_docs"] = merged_docs
+        state["vector_db_results"] = vector_docs
+        state["graph_db_results"] = graph_docs
+        state["retrieval_fusion_stats"] = {
+            "vector_docs": len(vector_docs),
+            "graph_docs": len(graph_docs),
+            "merged_docs": len(merged_docs),
+            "rrf_k": self.rrf_k,
+            "mmr_lambda": self.mmr_lambda
+        }
+
+        self.logger.info(
+            f"融合检索完成: vector={len(vector_docs)}, graph={len(graph_docs)}, merged={len(merged_docs)}"
+        )
         return state
 
     async def graph_db_retrieval_node(self, state: RAGGraphState, runtime: Runtime[RAGContext]) -> RAGGraphState:
@@ -806,18 +1095,12 @@ class RAGNodes:
                     result = result.split(dc_marker, 1)[1].strip()
                     #self.logger.info(f"提取Document Chunks后的结果: {result}")
 
-                # 将检索结果转换为文档格式
-                graph_doc = RetrievedDocument(
-                    page_content=result,
-                    metadata={
-                        "source": "lightrag_graph",
-                        "retrieval_mode": "global",
-                        "document_name": "知识图谱检索结果"
-                    }
-                )
+                context = runtime.context
+                max_docs = context.max_retrieval_docs if context else 3
+                graph_docs = self._split_graph_result_to_docs(result, max_docs)
 
-                state["retrieved_docs"] = [graph_doc]
-                state["graph_db_results"] = [graph_doc]
+                state["retrieved_docs"] = graph_docs
+                state["graph_db_results"] = graph_docs
 
                 self.logger.info(f"图数据库检索成功，结果长度: {len(result)}")
             else:
@@ -1147,6 +1430,8 @@ class RAGNodes:
 
         if retrieval_mode == RetrievalMode.VECTOR_ONLY:
             return "vector_db"
+        elif retrieval_mode == RetrievalMode.HYBRID:
+            return "hybrid_db"
         elif retrieval_mode == RetrievalMode.GRAPH_ONLY:
             return "graph_db"
         elif retrieval_mode == RetrievalMode.AUTO:

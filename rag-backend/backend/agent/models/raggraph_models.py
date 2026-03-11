@@ -9,6 +9,7 @@ class RetrievalMode:
     """
     VECTOR_ONLY = "vector_only"
     GRAPH_ONLY = "graph_only"
+    HYBRID = "hybrid"
     NO_RETRIEVAL = "no_retrieval"
     AUTO = "auto"
 

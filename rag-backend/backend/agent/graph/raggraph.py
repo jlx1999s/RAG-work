@@ -182,6 +182,7 @@ class RAGGraph:
         workflow.add_node("expand_subquestions", self.nodes.expand_subquestions_node)
         workflow.add_node("classify_question_type", self.nodes.classify_question_type_node)
         workflow.add_node("vector_db_retrieval", self.nodes.vector_db_retrieval_node)
+        workflow.add_node("hybrid_retrieval", self.nodes.hybrid_retrieval_node)
         workflow.add_node("graph_db_retrieval", self.nodes.graph_db_retrieval_node)
         workflow.add_node("generate_answer", self.nodes.generate_answer_node)
 
@@ -231,6 +232,7 @@ class RAGGraph:
             self.nodes.route_question_type,
             {
                 "vector_db": "vector_db_retrieval",
+                "hybrid_db": "hybrid_retrieval",
                 "graph_db": "graph_db_retrieval"
             }
         )
@@ -240,6 +242,9 @@ class RAGGraph:
 
         # 图数据库检索 -> 生成答案
         workflow.add_edge("graph_db_retrieval", "generate_answer")
+
+        # 融合检索 -> 生成答案
+        workflow.add_edge("hybrid_retrieval", "generate_answer")
 
         # 直接回答 -> 结束
         workflow.add_edge("direct_answer", END)

@@ -25,7 +25,7 @@ class RAGGraphState(TypedDict, total=False):
     system_prompt: str                 # 系统提示（从context获取）
     
     # ==================== 流程控制 ====================
-    retrieval_mode: str                # 检索模式（vector_only/graph_only/no_retrieval/auto）
+    retrieval_mode: str                # 检索模式（vector_only/hybrid/graph_only/no_retrieval/auto）
     need_retrieval: bool               # 是否需要检索
     need_retrieval_reason: Optional[str] = ""    # 需要检索的理由
     retrieval_mode_reason: Optional[str] = ""    # 检索模式的理由
@@ -40,6 +40,7 @@ class RAGGraphState(TypedDict, total=False):
     retrieved_docs: List[RetrievedDocument]  # 检索到的文档列表
     vector_db_results: List[RetrievedDocument]  # 向量数据库检索结果
     graph_db_results: List[RetrievedDocument]   # 图数据库检索结果
+    retrieval_fusion_stats: Dict[str, Any]  # 融合检索统计信息
     
     # ==================== 答案生成 ====================
     final_answer: str                  # 最终答案
@@ -91,10 +92,10 @@ def create_initial_rag_state(
         retrieved_docs=[],
         vector_db_results=[],
         graph_db_results=[],
+        retrieval_fusion_stats={},
         
         # ==================== 答案生成 ====================
         final_answer="",
         answer_sources=[]
     )
     
-

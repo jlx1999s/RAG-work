@@ -95,10 +95,15 @@ def _run_single_evaluation(
     for ctx in contexts:
         if ctx is None:
             continue
-        normalized_contexts.append(str(ctx))
+        page_content = getattr(ctx, "page_content", None)
+        if page_content is not None:
+            normalized_contexts.append(str(page_content))
+        else:
+            normalized_contexts.append(str(ctx))
     return {
         "answer": answer,
-        "contexts": normalized_contexts
+        "contexts": normalized_contexts,
+        "retrieval_fusion_stats": output.get("retrieval_fusion_stats") or {}
     }
 
 
@@ -244,6 +249,7 @@ async def _evaluate_payload(payload: EvalRequest, current_user: int) -> Dict[str
         max_retrieval_docs=payload.max_retrieval_docs
     )
     items: List[Dict[str, Any]] = []
+    fusion_stats_rows: List[Dict[str, Any]] = []
     for row in rows:
         question = row.get("question") or row.get("query") or ""
         reference = row.get("reference") or row.get("answer") or ""
@@ -251,13 +257,17 @@ async def _evaluate_payload(payload: EvalRequest, current_user: int) -> Dict[str
             continue
         eval_result = await run_in_threadpool(_run_single_evaluation, rag_graph, question, context)
         contexts = eval_result.get("contexts") or []
+        fusion_stats = eval_result.get("retrieval_fusion_stats") or {}
+        if fusion_stats:
+            fusion_stats_rows.append(fusion_stats)
         items.append({
             "question": question,
             "reference": reference,
             "answer": eval_result.get("answer") or "",
             "contexts": contexts,
             "contexts_count": len(contexts),
-            "contexts_preview": [str(c)[:300] for c in contexts[:3]]
+            "contexts_preview": [str(c)[:300] for c in contexts[:3]],
+            "retrieval_fusion_stats": fusion_stats
         })
     metrics_result: Dict[str, Any] = {}
     try:
@@ -274,8 +284,15 @@ async def _evaluate_payload(payload: EvalRequest, current_user: int) -> Dict[str
             }
         metrics_result = {"metrics": fallback, "items": items, "warning": "RAGAS评测失败，已返回基础指标"}
     elapsed_ms = int((time.time() - start_time) * 1000)
+    fusion_summary = {}
+    if fusion_stats_rows:
+        for key in {"vector_docs", "graph_docs", "merged_docs", "rrf_k", "mmr_lambda"}:
+            values = [row.get(key) for row in fusion_stats_rows if isinstance(row.get(key), (int, float))]
+            if values:
+                fusion_summary[key] = round(sum(values) / len(values), 6)
     response_payload = {
         "summary": metrics_result.get("metrics", {}),
+        "retrieval_fusion_summary": fusion_summary,
         "items": metrics_result.get("items", items),
         "elapsed_ms": elapsed_ms,
         "total": len(items),

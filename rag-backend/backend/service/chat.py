@@ -5,6 +5,7 @@
 基于 RAGGraph 提供聊天功能
 """
 import uuid
+import time
 from typing import Dict, Any, AsyncGenerator, Optional, List
 from backend.config.agent import get_rag_graph_for_collection
 from backend.agent.contexts.raggraph_context import RAGContext
@@ -40,6 +41,119 @@ def _make_serializable(obj: Any) -> Any:
         return obj
     else:
         return str(obj)
+
+def _to_preview_text(value: Any, limit: int = 240) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}..."
+
+def _serialize_docs(docs: Any, limit: int = 4) -> List[Dict[str, Any]]:
+    serialized: List[Dict[str, Any]] = []
+    if not isinstance(docs, list):
+        return serialized
+    for idx, doc in enumerate(docs[:limit]):
+        page_content = getattr(doc, "page_content", "") if doc is not None else ""
+        metadata = getattr(doc, "metadata", {}) if doc is not None else {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        serialized.append({
+            "index": idx + 1,
+            "content_preview": _to_preview_text(page_content, 320),
+            "document_name": metadata.get("document_name"),
+            "chunk_index": metadata.get("chunk_index"),
+            "source": metadata.get("source"),
+            "retrieval_mode": metadata.get("retrieval_mode"),
+            "rrf_score": metadata.get("rrf_score"),
+            "semantic_score": metadata.get("semantic_score")
+        })
+    return serialized
+
+def _build_node_trace(node_name: str, node_output: Dict[str, Any], step_index: int) -> Dict[str, Any]:
+    trace: Dict[str, Any] = {
+        "step_index": step_index,
+        "node_name": node_name,
+        "timestamp": int(time.time() * 1000)
+    }
+    if node_name == "check_tool_needed":
+        trace["decision"] = {
+            "need_tool": bool(node_output.get("need_tool")),
+            "selected_tool": node_output.get("selected_tool")
+        }
+        trace["summary"] = f"工具需求判断: need_tool={trace['decision']['need_tool']}"
+        return trace
+    if node_name == "tool_calling":
+        messages = node_output.get("messages") or []
+        final_message = messages[-1].content if messages else ""
+        trace["output"] = {
+            "selected_tool": node_output.get("selected_tool"),
+            "answer_preview": _to_preview_text(final_message, 280)
+        }
+        trace["summary"] = "工具执行完成"
+        return trace
+    if node_name == "check_retrieval_needed":
+        trace["decision"] = {
+            "need_retrieval": bool(node_output.get("need_retrieval")),
+            "reason": node_output.get("need_retrieval_reason"),
+            "original_question": node_output.get("original_question")
+        }
+        trace["summary"] = f"检索判断: need_retrieval={trace['decision']['need_retrieval']}"
+        return trace
+    if node_name == "expand_subquestions":
+        subquestions = node_output.get("subquestions") or []
+        trace["output"] = {
+            "subquestions": subquestions,
+            "count": len(subquestions)
+        }
+        trace["summary"] = f"子问题扩展: {len(subquestions)} 条"
+        return trace
+    if node_name == "classify_question_type":
+        trace["decision"] = {
+            "retrieval_mode": node_output.get("retrieval_mode"),
+            "reason": node_output.get("retrieval_mode_reason")
+        }
+        trace["summary"] = f"检索分类: {node_output.get('retrieval_mode')}"
+        return trace
+    if node_name == "vector_db_retrieval":
+        docs = node_output.get("vector_db_results") or []
+        trace["output"] = {
+            "docs_count": len(docs),
+            "docs_preview": _serialize_docs(docs)
+        }
+        trace["summary"] = f"向量检索返回 {len(docs)} 条"
+        return trace
+    if node_name == "graph_db_retrieval":
+        docs = node_output.get("graph_db_results") or []
+        trace["output"] = {
+            "docs_count": len(docs),
+            "docs_preview": _serialize_docs(docs)
+        }
+        trace["summary"] = f"图检索返回 {len(docs)} 条"
+        return trace
+    if node_name == "hybrid_retrieval":
+        docs = node_output.get("retrieved_docs") or []
+        trace["output"] = {
+            "docs_count": len(docs),
+            "docs_preview": _serialize_docs(docs),
+            "fusion_stats": node_output.get("retrieval_fusion_stats") or {}
+        }
+        trace["summary"] = f"融合检索返回 {len(docs)} 条"
+        return trace
+    if node_name in {"generate_answer", "direct_answer"}:
+        messages = node_output.get("messages") or []
+        final_message = messages[-1].content if messages else ""
+        trace["output"] = {
+            "answer_preview": _to_preview_text(final_message, 320),
+            "sources_count": len(node_output.get("answer_sources") or [])
+        }
+        trace["summary"] = "答案生成完成"
+        return trace
+    trace["summary"] = f"节点执行: {node_name}"
+    return trace
 
 
 def _validate_chat_request(chat_request: ChatRequest) -> Dict[str, Any]:
@@ -281,48 +395,24 @@ async def chat_stream(chat_request: ChatRequest) -> AsyncGenerator[Dict[str, Any
         logger.info("调用 RAGGraph.stream 方法...")
         
         try:
+            step_index = 0
             # 使用 stream_mode="messages" 进行流式处理
             async for mode,chunk in rag_graph.astream(input_data, context, stream_mode="mix"):
                 if mode == "updates":
-                     # 显示节点名称
                     node_name = list(chunk.keys())[0]
                     node_output = chunk[node_name]
                     logger.info(f"（流式输出）节点名称: {node_name}")
-                    #logger.info(f"节点输出: {node_output}")
-                    
-                    # 根据节点类型处理content
-                    content = ""
-                    if node_name == "check_retrieval_needed":
-                        content = f"节点名称为{node_name}，LLM判断是否需要检索结果为{node_output['need_retrieval']}，理由为{node_output['need_retrieval_reason']}，提取原始问题为{node_output['original_question']}"
-                    elif node_name == "expand_subquestions":
-                        extraquestion = "\n".join([f"{i+1}. {q}" for i, q in enumerate(node_output['subquestions'])])
-                        content = f"节点名称为{node_name}，扩展子问题为{extraquestion}"
-                    elif node_name == "classify_question_type":
-                        content = f"节点名称为{node_name}，LLM判断检索模式为{node_output['retrieval_mode']}，理由为{node_output['retrieval_mode_reason']}"
-                    elif node_name == "vector_db_retrieval":
-                        vectordoc = "\n".join([f"{i+1}. {doc.page_content}" for i, doc in enumerate(node_output['vector_db_results'])])
-                        content = f"节点名称为{node_name}，向量检索到的文档为{vectordoc}"
-                    elif node_name == "graph_db_retrieval":
-                        graphdoc = "\n".join([f"{i+1}. {doc}" for i, doc in enumerate(node_output['graph_db_results'])])
-                        content = f"节点名称为{node_name}，图检索到的文档为{graphdoc}"
-                    elif node_name == "generate_answer" or node_name == "direct_answer" or node_name == "tool_calling":
-                        content = f"节点名称为{node_name}，回答完毕"
-                        
-                        # 提取来源信息
+                    step_index += 1
+                    trace_data = _build_node_trace(node_name, node_output, step_index)
+                    content = trace_data.get("summary") or f"节点名称为{node_name}"
+                    if node_name == "generate_answer" or node_name == "direct_answer" or node_name == "tool_calling":
                         sources = node_output.get('answer_sources', [])
-                        
-                        # 存储messages类型的消息到数据库
                         extra_data = {
                             "node_name": node_name,
-                            "sources": sources  # 将来源信息也存储到数据库
+                            "sources": sources
                         }
-                        
-                        latest_message = node_output['messages'][-1]  # 获取最新的一条消息
+                        latest_message = node_output['messages'][-1]
                         message_content = latest_message.content if hasattr(latest_message, 'content') else str(latest_message)
-                        
-                        # 不再记录完整消息到日志（避免重复）
-                        # logger.info(f"（流式输出）消息: {message_content}")
-                        
                         save_chat_message(
                             conversation_id=session_id,
                             role="assistant",
@@ -338,19 +428,19 @@ async def chat_stream(chat_request: ChatRequest) -> AsyncGenerator[Dict[str, Any
                                 "session_id": session_id,
                                 "sources": sources
                             }
-                    else:
-                        content = f"节点名称为{node_name}"
-                    
-                    # 统一yield
                     yield {
                         "type": "node_update",
                         "session_id": session_id,
                         "node_name": node_name,
-                        "content": content
+                        "content": content,
+                        "step_index": step_index,
+                        "trace_data": trace_data
                     }
-                    
-                    # 存储updates类型的消息到数据库（不检查长度）
-                    extra_data = {"node_name": node_name}
+                    extra_data = {
+                        "node_name": node_name,
+                        "trace_data": trace_data,
+                        "step_index": step_index
+                    }
                     save_chat_message(
                         conversation_id=session_id,
                         role="system",
@@ -387,15 +477,28 @@ async def chat_stream(chat_request: ChatRequest) -> AsyncGenerator[Dict[str, Any
 
             # 流式输出完成后,发送结束节点通知
             end_content = "节点名称为end,对话流程结束"
+            end_step_index = step_index + 1
+            end_trace = {
+                "step_index": end_step_index,
+                "node_name": "end",
+                "timestamp": int(time.time() * 1000),
+                "summary": "流程结束"
+            }
             yield {
                 "type": "node_update",
                 "session_id": session_id,
                 "node_name": "end",
-                "content": end_content
+                "content": end_content,
+                "step_index": end_step_index,
+                "trace_data": end_trace
             }
 
             # 存储结束节点消息到数据库
-            extra_data = {"node_name": "end"}
+            extra_data = {
+                "node_name": "end",
+                "trace_data": end_trace,
+                "step_index": end_step_index
+            }
             save_chat_message(
                 conversation_id=session_id,
                 role="system",
@@ -504,12 +607,12 @@ async def get_chat_history_list(user_id: str, conversation_id: Optional[str] = N
                         'conversation_id': record['conversation_id'],
                         'role': record['role'],
                         'type': record['type'],
-                        'content': record['content']
+                        'content': record['content'],
+                        'timestamp': record.get('created_at') or record.get('timestamp')
                     }
                     
-                    # 如果有额外数据，添加到历史项中
                     if record.get('extra_data'):
-                        # 如果extra_data中有node_name，提取出来
+                        history_item['extra_data'] = record['extra_data']
                         if isinstance(record['extra_data'], dict) and 'node_name' in record['extra_data']:
                             history_item['node_name'] = record['extra_data']['node_name']
                     

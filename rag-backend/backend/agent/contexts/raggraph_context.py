@@ -34,7 +34,7 @@ class RAGContext:
         default=RetrievalMode.AUTO,
         metadata={
             "description": "检索模式配置。"
-            "决定使用向量检索、图检索还是自动选择。",
+            "决定使用向量检索、融合检索、图检索还是自动选择。",
         },
     )
     max_retrieval_docs: int = field(
@@ -100,4 +100,3 @@ class RAGContext:
 
         return config
     
-
