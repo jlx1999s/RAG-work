@@ -31,6 +31,9 @@ class RAGGraphState(TypedDict, total=False):
     retrieval_mode_reason: Optional[str] = ""    # 检索模式的理由
     need_tool: bool                    # 是否需要调用工具
     selected_tool: Optional[str] = ""        # 选中的工具名称
+    selected_skill: Optional[str] = ""       # 选中的技能名称
+    tool_missing_params: List[str]           # 工具调用缺失参数
+    tool_selection_reason: Optional[str] = ""  # 工具/技能选择理由
     # ==================== 问题处理 ====================
     original_question: str             # 原始问题
     subquestions: List[str]            # 扩展的子问题列表
@@ -82,6 +85,11 @@ def create_initial_rag_state(
         
         # ==================== 流程控制 ====================
         retrieval_mode=context.retrieval_mode,
+        need_tool=False,
+        selected_tool="",
+        selected_skill="",
+        tool_missing_params=[],
+        tool_selection_reason="",
         
         # ==================== 问题处理 ====================
         original_question="",

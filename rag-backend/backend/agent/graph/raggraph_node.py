@@ -8,7 +8,8 @@ from ..prompts.raggraph_prompt import (
     RAGGraphPrompts,
     RetrievalNeedDecision,
     SubquestionExpansion,
-    RetrievalTypeDecision
+    RetrievalTypeDecision,
+    ToolSkillDecision
 )
 from langmem import create_manage_memory_tool, create_search_memory_tool
 from langchain_core.messages import AIMessage, ToolMessage
@@ -17,7 +18,8 @@ from backend.agent.tools.exceptions import (
     ToolCallException,
     ToolExecutionError,
     ToolNotFoundError,
-    ToolExecutionTimeoutError
+    ToolExecutionTimeoutError,
+    ToolValidationError
 )
 from backend.agent.tools.audit import get_audit_logger
 import asyncio
@@ -25,6 +27,7 @@ import json
 import os
 import time
 import math
+import re
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from urllib.parse import urlparse, unquote
 from backend.config.oss import get_presigned_url_for_download
@@ -62,6 +65,20 @@ class RAGNodes:
         self.vector_source_weight = float(os.getenv("RAG_VECTOR_SOURCE_WEIGHT", "1.0"))
         self.mmr_lambda = float(os.getenv("RAG_MMR_LAMBDA", "0.75"))
         self.enable_semantic_rerank = os.getenv("RAG_ENABLE_SEMANTIC_RERANK", "true").lower() in {"true", "1", "yes", "on"}
+        self.assessment_skill_name = "health_risk_assessment"
+        self.tool_map = {tool.name: tool for tool in self.tools}
+        self.assessment_profiles = {
+            "hypertension_risk_assessment": {
+                "required_params": ["age", "systolic_bp", "diastolic_bp"],
+                "display_name": "高血压风险评估",
+                "trigger_keywords": ["高血压", "血压", "收缩压", "舒张压", "高压", "低压"]
+            },
+            "diabetes_risk_assessment": {
+                "required_params": ["age", "bmi"],
+                "display_name": "糖尿病风险评估",
+                "trigger_keywords": ["糖尿病", "血糖", "bmi", "体重指数"]
+            }
+        }
     
     def _execute_tool_with_timeout(self, tool, tool_args, timeout=None):
         """带超时控制的工具执行
@@ -112,321 +129,283 @@ class RAGNodes:
 
         return state
 
+    def _extract_hypertension_slots(self, question: str) -> dict:
+        slots = {}
+        age_match = re.search(r"(?:年龄|age)\s*[:：]?\s*(\d{1,3})", question, re.IGNORECASE)
+        if not age_match:
+            age_match = re.search(r"(\d{1,3})\s*岁", question)
+        if age_match:
+            slots["age"] = int(age_match.group(1))
+        bp_pair_match = re.search(r"(\d{2,3})\s*/\s*(\d{2,3})", question)
+        if bp_pair_match:
+            slots["systolic_bp"] = int(bp_pair_match.group(1))
+            slots["diastolic_bp"] = int(bp_pair_match.group(2))
+        else:
+            systolic_match = re.search(r"(?:收缩压|高压)\s*[:：]?\s*(\d{2,3})", question)
+            diastolic_match = re.search(r"(?:舒张压|低压)\s*[:：]?\s*(\d{2,3})", question)
+            if systolic_match:
+                slots["systolic_bp"] = int(systolic_match.group(1))
+            if diastolic_match:
+                slots["diastolic_bp"] = int(diastolic_match.group(1))
+        return slots
+
+    def _extract_diabetes_slots(self, question: str) -> dict:
+        slots = {}
+        age_match = re.search(r"(?:年龄|age)\s*[:：]?\s*(\d{1,3})", question, re.IGNORECASE)
+        if not age_match:
+            age_match = re.search(r"(\d{1,3})\s*岁", question)
+        if age_match:
+            slots["age"] = int(age_match.group(1))
+        bmi_match = re.search(r"(?:bmi|体重指数)\s*[:：]?\s*(\d{1,2}(?:\.\d{1,2})?)", question, re.IGNORECASE)
+        if bmi_match:
+            slots["bmi"] = float(bmi_match.group(1))
+        return slots
+
+    def _extract_required_slots(self, tool_name: str, question: str) -> dict:
+        if tool_name == "hypertension_risk_assessment":
+            return self._extract_hypertension_slots(question)
+        if tool_name == "diabetes_risk_assessment":
+            return self._extract_diabetes_slots(question)
+        return {}
+
+    def _missing_required_params(self, tool_name: str, question: str) -> list[str]:
+        profile = self.assessment_profiles.get(tool_name, {})
+        required_params = profile.get("required_params", [])
+        if not required_params:
+            return []
+        extracted_slots = self._extract_required_slots(tool_name, question)
+        return [param for param in required_params if param not in extracted_slots]
+
+    def _is_assessment_skill_candidate(self, question: str) -> bool:
+        question_text = (question or "").lower()
+        generic_keywords = ["评估", "风险", "风险评估", "计算"]
+        if any(keyword in question_text for keyword in generic_keywords):
+            return True
+        for profile in self.assessment_profiles.values():
+            for keyword in profile.get("trigger_keywords", []):
+                if keyword.lower() in question_text:
+                    return True
+        return False
+
+    def _build_missing_params_answer(self, tool_name: str, missing_params: list[str]) -> str:
+        display_name = self.assessment_profiles.get(tool_name, {}).get("display_name", tool_name)
+        missing_text = "、".join(missing_params) if missing_params else "必需参数"
+        return f"要进行{display_name}，还需要补充以下参数：{missing_text}。请补充后我将自动继续评估。"
+
+    def _validate_tool_args(self, tool_name: str, tool_args: dict) -> dict:
+        errors = {}
+        if tool_name == "hypertension_risk_assessment":
+            age = tool_args.get("age")
+            systolic_bp = tool_args.get("systolic_bp")
+            diastolic_bp = tool_args.get("diastolic_bp")
+            if not isinstance(age, int) or age < 1 or age > 120:
+                errors["age"] = "年龄需为1-120的整数"
+            if not isinstance(systolic_bp, int) or systolic_bp < 60 or systolic_bp > 260:
+                errors["systolic_bp"] = "收缩压需为60-260的整数"
+            if not isinstance(diastolic_bp, int) or diastolic_bp < 30 or diastolic_bp > 180:
+                errors["diastolic_bp"] = "舒张压需为30-180的整数"
+        elif tool_name == "diabetes_risk_assessment":
+            age = tool_args.get("age")
+            bmi = tool_args.get("bmi")
+            if not isinstance(age, int) or age < 1 or age > 120:
+                errors["age"] = "年龄需为1-120的整数"
+            if not isinstance(bmi, (int, float)) or bmi < 10 or bmi > 80:
+                errors["bmi"] = "BMI需为10-80之间的数值"
+        return errors
+
     def check_tool_needed_node(self, state: RAGGraphState, runtime: Runtime[RAGContext]) -> RAGGraphState:
-        """判断是否需要工具调用节点
-
-        使用LLM智能判断用户问题是否需要调用工具（如风险评估）。
-        只有当用户提供了足够的参数时才会调用工具。
-
-        Args:
-            state: 当前状态
-            runtime: 运行时上下文
-
-        Returns:
-            更新后的状态
-        """
         self.logger.info("=" * 50)
-        self.logger.info("[RAG Graph] 节点: CHECK_TOOL_NEEDED - 判断是否需要工具")
-
-        # 如果没有工具，直接跳过
+        self.logger.info("[RAG Graph] 节点: CHECK_TOOL_NEEDED - 技能选择与工具门控")
+        state["need_tool"] = False
+        state["selected_skill"] = ""
+        state["selected_tool"] = ""
+        state["tool_missing_params"] = []
+        state["tool_selection_reason"] = ""
         if not self.tools:
-            self.logger.info("无可用工具，跳过工具检查")
-            state["need_tool"] = False
             return state
 
-        # 获取用户问题
         messages = state.get("messages", [])
         if not messages:
-            state["need_tool"] = False
             return state
 
-        user_question = messages[-1].content if hasattr(messages[-1], 'content') else str(messages[-1])
-        self.logger.info(f"分析问题: {user_question}")
+        user_question = messages[-1].content if hasattr(messages[-1], "content") else str(messages[-1])
+        if not self._is_assessment_skill_candidate(user_question):
+            self.logger.info("未命中评估技能轻量门控，跳过技能激活")
+            return state
 
+        available_profile_lines = []
+        for tool_name, profile in self.assessment_profiles.items():
+            if tool_name in self.tool_map:
+                available_profile_lines.append(
+                    f"- {tool_name}({profile['display_name']}), 必需参数: {', '.join(profile['required_params'])}"
+                )
+        profiles_text = "\n".join(available_profile_lines)
+        if not profiles_text:
+            return state
         try:
-            # 构建工具描述
-            tool_descriptions = []
-            for tool in self.tools:
-                tool_descriptions.append(f"- {tool.name}: {tool.description}")
-            tools_text = "\n".join(tool_descriptions)
-
-            # 使用LLM判断是否需要工具
-            prompt = f"""你是一个智能助手，需要判断用户问题是否需要调用工具。
-
-可用工具：
-{tools_text}
-
-用户问题：{user_question}
-
-判断规则：
-1. 用户是否明确请求进行风险评估、计算等需要工具的任务
-2. 对于糖尿病风险评估：
-   - **必需参数**：年龄(age)、BMI
-   - **可选参数**：腰围、血压、家族史、体育活动、吸烟、饮食质量（这些有默认值）
-3. 对于高血压风险评估：
-   - **必需参数**：年龄、收缩压、舒张压
-   - **可选参数**：家族史、吸烟、盐分摄入（这些有默认值）
-4. 只要用户提供了必需参数，就应该调用工具（可选参数会使用默认值）
-
-只有同时满足以下条件才返回需要工具：
-- 用户明确需要工具功能（如"风险评估"）
-- 提供了该工具的**必需参数**
-
-请用JSON格式回答：
-{{
-  "need_tool": true/false,
-  "tool_name": "工具名称或null",
-  "reason": "判断理由",
-  "missing_params": ["缺少的必需参数列表，如果有"]
-}}"""
-
-            response = self.llm.invoke(prompt)
-            response_text = response.content
-
-            # 解析JSON响应
-            import re
-            json_match = re.search(r'\{[^}]+\}', response_text, re.DOTALL)
-            if json_match:
-                decision = json.loads(json_match.group())
-                need_tool = decision.get("need_tool", False)
-                tool_name = decision.get("tool_name")
-                reason = decision.get("reason", "")
-
-                state["need_tool"] = need_tool
-                state["selected_tool"] = tool_name
-                self.logger.info(f"LLM判断: need_tool={need_tool}, tool={tool_name}, reason={reason}")
-            else:
-                # 解析失败，默认不使用工具
-                state["need_tool"] = False
-                self.logger.warning("无法解析LLM响应，默认不使用工具")
-
+            prompt = f"""你是健康风险评估技能路由器。请判断是否激活评估技能，并选择最匹配的工具。
+可用评估工具:
+{profiles_text}
+用户问题: {user_question}
+要求:
+1) 只有当用户明确要风险评估/计算，或提供了可评估参数时，use_assessment_skill=true
+2) selected_tool只能从可用评估工具里选择
+3) missing_params只包含必需参数缺失项
+4) 如果不激活技能，selected_tool返回null"""
+            structured_llm = self.llm.with_structured_output(ToolSkillDecision)
+            decision = structured_llm.invoke(prompt)
+            selected_tool = (decision.selected_tool or "").strip()
+            if selected_tool and selected_tool not in self.tool_map:
+                selected_tool = ""
+            if not selected_tool:
+                if any(keyword in user_question for keyword in ["高血压", "血压", "收缩压", "舒张压", "高压", "低压"]):
+                    selected_tool = "hypertension_risk_assessment" if "hypertension_risk_assessment" in self.tool_map else ""
+                elif any(keyword in user_question.lower() for keyword in ["糖尿病", "血糖", "bmi", "体重指数"]):
+                    selected_tool = "diabetes_risk_assessment" if "diabetes_risk_assessment" in self.tool_map else ""
+            missing_params = list(decision.missing_params or [])
+            if selected_tool:
+                inferred_missing = self._missing_required_params(selected_tool, user_question)
+                missing_params = list(dict.fromkeys([*missing_params, *inferred_missing]))
+            state["selected_skill"] = self.assessment_skill_name if selected_tool else ""
+            state["selected_tool"] = selected_tool
+            state["tool_missing_params"] = missing_params
+            state["tool_selection_reason"] = decision.reasoning
+            state["need_tool"] = bool(state["selected_skill"] and state["selected_tool"])
+            self.logger.info(
+                f"技能路由: need_tool={state['need_tool']}, skill={state['selected_skill']}, tool={state['selected_tool']}, missing={missing_params}"
+            )
         except Exception as e:
-            self.logger.error(f"工具判断失败: {e}")
+            self.logger.error(f"技能路由失败: {e}")
             state["need_tool"] = False
-
         return state
 
     def tool_calling_node(self, state: RAGGraphState, runtime: Runtime[RAGContext]) -> RAGGraphState:
-        """工具调用节点
-
-        执行工具调用，获取结果并格式化为友好的回答。
-
-        Args:
-            state: 当前状态
-            runtime: 运行时上下文
-
-        Returns:
-            更新后的状态
-        """
         self.logger.info("="*50)
         self.logger.info("[RAG Graph] 节点: TOOL_CALLING - 执行工具调用")
-
         messages = state.get("messages", [])
-        user_question = messages[-1].content if messages and hasattr(messages[-1], 'content') else ""
+        user_question = messages[-1].content if messages and hasattr(messages[-1], "content") else ""
+        selected_skill = state.get("selected_skill", "")
         selected_tool = state.get("selected_tool")
-
         self.logger.info(f"用户问题: {user_question}")
+        self.logger.info(f"选中的技能: {selected_skill}")
         self.logger.info(f"选中的工具: {selected_tool}")
-
+        missing_params = state.get("tool_missing_params", [])
+        if missing_params:
+            answer = self._build_missing_params_answer(selected_tool or "", missing_params)
+            state["final_answer"] = answer
+            state["messages"] = [AIMessage(content=answer)]
+            return state
+        if not selected_tool or selected_tool not in self.tool_map:
+            available_tools = list(self.tool_map.keys())
+            error = ToolNotFoundError(tool_name=selected_tool or "unknown", available_tools=available_tools)
+            state["error"] = error.to_dict()
+            state["final_answer"] = error.message
+            state["messages"] = [AIMessage(content=error.message)]
+            return state
+        bound_tool = self.tool_map[selected_tool]
+        required_params = self.assessment_profiles.get(selected_tool, {}).get("required_params", [])
+        required_params_text = ", ".join(required_params) if required_params else "无"
         try:
-            # 绑定工具到LLM
-            llm_with_tools = self.llm.bind_tools(self.tools)
-
-            # 构建更明确的提示词，强制LLM调用工具
-            tool_names = [tool.name for tool in self.tools]
-            prompt = f"""用户请求进行风险评估。
-
+            llm_with_tools = self.llm.bind_tools([bound_tool])
+            prompt = f"""你是健康评估技能执行器。
 用户问题：{user_question}
-
-你必须使用以下工具之一来回答：{tool_names}
-
-请直接调用工具，从用户问题中提取参数。
-
-参数提取指导：
-
-对于 diabetes_risk_assessment（糖尿病风险评估）：
-- age：提取年龄数字
-- bmi：提取BMI数值（可能是小数）
-- blood_pressure：如果提到“血压偏高”或“高血压”，设置 blood_pressure="偏高"
-- family_history：如果提到“有家族史”或类似表述，设置 family_history=True
-
-对于 hypertension_risk_assessment（高血压风险评估）：
-- age：提取年龄数字
-- systolic_bp：提取收缩压（高压）数字，单位mmHg
-- diastolic_bp：提取舒张压（低压）数字，单位mmHg
-  例如：“血压140/90” → systolic_bp=140, diastolic_bp=90
-- family_history：如果提到高血压家族史，设置 family_history=True
-- smoking：如果提到吸烟，设置 smoking=True
-
-必须调用工具，不能只是返回文本回答！"""
-
-            # 调用LLM（带工具）
+已选择技能：{selected_skill}
+你必须且只能调用工具：{selected_tool}
+必需参数：{required_params_text}
+请从用户问题中抽取参数并调用工具。"""
             self.logger.info("调用LLM，期待工具调用...")
             response = llm_with_tools.invoke(prompt)
-
-            # 检查是否有工具调用
             if hasattr(response, 'tool_calls') and response.tool_calls:
                 self.logger.info(f"LLM请求调用 {len(response.tool_calls)} 个工具")
-
-                # 执行工具调用
-                tool_results = []
                 audit_logger = get_audit_logger()
-                
-                for tool_call in response.tool_calls:
-                    tool_name = tool_call['name']
-                    tool_args = tool_call['args']
-                    self.logger.info(f"调用工具: {tool_name}, 参数: {tool_args}")
-                    
-                    # 记录开始时间
-                    start_time = time.time()
-                    tool_result = None
-                    tool_error = None
-
-                    # 查找并执行工具
-                    tool_found = False
-                    for tool in self.tools:
-                        if tool.name == tool_name:
-                            tool_found = True
-                            try:
-                                # 使用带超时的执行方法
-                                tool_result = self._execute_tool_with_timeout(tool, tool_args)
-                                tool_results.append(tool_result)
-                                self.logger.info(f"工具执行成功: {tool_name}, 结果: {tool_result}")
-                            except ToolExecutionTimeoutError as timeout_error:
-                                # 超时异常
-                                self.logger.error(f"工具执行超时: {timeout_error.to_dict()}")
-                                tool_error = timeout_error.to_dict()
-                                
-                                state["error"] = timeout_error.to_dict()
-                                state["final_answer"] = timeout_error.message
-                                state["messages"] = [AIMessage(content=timeout_error.message)]
-                            except Exception as tool_exec_error:
-                                # 其他执行错误
-                                error = ToolExecutionError(
-                                    tool_name=tool_name,
-                                    error_message=str(tool_exec_error),
-                                    details=f"{type(tool_exec_error).__name__}: {tool_exec_error}"
-                                )
-                                self.logger.error(f"工具执行失败: {error.to_dict()}")
-                                tool_error = error.to_dict()
-                                
-                                state["error"] = error.to_dict()
-                                state["final_answer"] = error.message
-                                state["messages"] = [AIMessage(content=error.message)]
-                            finally:
-                                # 计算执行时间
-                                execution_time_ms = (time.time() - start_time) * 1000
-                                
-                                # 审计日志
-                                audit_logger.log_tool_call(
-                                    conversation_id=state.get("session_id", "unknown"),
-                                    user_id=state.get("user_id", "unknown"),
-                                    tool_name=tool_name,
-                                    tool_args=tool_args,
-                                    result=tool_result,
-                                    error=tool_error,
-                                    execution_time_ms=execution_time_ms
-                                )
-                                
-                                # 如果有错误，直接返回
-                                if tool_error:
-                                    return state
-                            break
-                    
-                    # 工具未找到
-                    if not tool_found:
-                        available_tools = [t.name for t in self.tools]
-                        error = ToolNotFoundError(
-                            tool_name=tool_name,
-                            available_tools=available_tools
-                        )
-                        self.logger.error(f"工具未找到: {error.to_dict()}")
-                        
-                        # 审计日志
-                        execution_time_ms = (time.time() - start_time) * 1000
-                        audit_logger.log_tool_call(
-                            conversation_id=state.get("session_id", "unknown"),
-                            user_id=state.get("user_id", "unknown"),
-                            tool_name=tool_name,
-                            tool_args=tool_args,
-                            error=error.to_dict(),
-                            execution_time_ms=execution_time_ms
-                        )
-                        
-                        state["error"] = error.to_dict()
-                        state["final_answer"] = error.message
-                        state["messages"] = [AIMessage(content=error.message)]
-                        return state
-
-                if tool_results:
-                    # 使用LLM将工具结果转化为友好的回答
-                    final_prompt = f"""基于以下工具执行结果，请给用户一个清晰、专业、友好的回答。
-
-用户问题：{user_question}
-
-工具结果：
-{json.dumps(tool_results, ensure_ascii=False, indent=2)}
-
-请：
-1. 用通俗易懂的语言解释结果
-2. 突出显示关键信息（风险等级、评分等）
-3. 给出具体的健康建议
-4. 使用Markdown格式，结构清晰"""
-
-                    # 使用invoke()而不是stream()
-                    # 原因：LangGraph的astream会自动处理流式输出
-                    # 在节点内部使用stream()会导致所有chunk都带langgraph_node metadata
-                    final_response = self.llm.invoke(final_prompt)
-
-                    # 构建完整的来源信息（支持多工具）
-                    sources = []
-                    for i, (tool_call, result) in enumerate(zip(response.tool_calls, tool_results)):
-                        tool_name = tool_call['name']
-                        sources.append({
-                            "index": i + 1,
-                            "tool_name": tool_name,
-                            "document_name": f"工具: {tool_name}",
-                            "content": f"风险等级: {result.get('risk_level', 'N/A')}, 评分: {result.get('risk_score', 'N/A')}",
-                            "retrieval_mode": "tool",
-                            "metadata": {
-                                "tool_args": tool_call['args'],
-                                "risk_level": result.get('risk_level'),
-                                "risk_score": result.get('risk_score'),
-                                "risk_factors": result.get('risk_factors', []),
-                                "recommendations": result.get('recommendations', [])
-                            }
-                        })
-
-                    state["final_answer"] = final_response.content
-                    state["answer_sources"] = sources
-                    state["messages"] = [AIMessage(content=final_response.content)]
-                    self.logger.info("✅ 工具调用成功，生成回答")
+                target_calls = [call for call in response.tool_calls if call.get("name") == selected_tool]
+                if not target_calls:
+                    state["final_answer"] = f"评估执行失败：模型未按要求调用 {selected_tool}。请重试或补充更明确参数。"
+                    state["messages"] = [AIMessage(content=state["final_answer"])]
                     return state
-            
-            # 如果LLM没有调用工具，记录详细信息
-            self.logger.warning("⚠️ LLM没有调用工具！")
-            self.logger.warning(f"LLM响应: {response}")
-            self.logger.warning(f"LLM响应类型: {type(response)}")
-            self.logger.warning(f"hasattr tool_calls: {hasattr(response, 'tool_calls')}")
-            if hasattr(response, 'tool_calls'):
-                self.logger.warning(f"tool_calls 内容: {response.tool_calls}")
-            
-            # 没有工具调用，返回提示
+                selected_call = target_calls[0]
+                tool_args = selected_call.get("args", {})
+                validation_errors = self._validate_tool_args(selected_tool, tool_args)
+                if validation_errors:
+                    error = ToolValidationError(
+                        tool_name=selected_tool,
+                        validation_errors=validation_errors,
+                        details="工具参数预校验失败"
+                    )
+                    state["error"] = error.to_dict()
+                    state["final_answer"] = f"{error.message}，请补充或修正参数后重试。"
+                    state["messages"] = [AIMessage(content=state["final_answer"])]
+                    return state
+                start_time = time.time()
+                tool_result = None
+                tool_error = None
+                try:
+                    tool_result = self._execute_tool_with_timeout(bound_tool, tool_args)
+                    self.logger.info(f"工具执行成功: {selected_tool}")
+                except ToolExecutionTimeoutError as timeout_error:
+                    tool_error = timeout_error.to_dict()
+                    state["error"] = tool_error
+                    state["final_answer"] = timeout_error.message
+                    state["messages"] = [AIMessage(content=timeout_error.message)]
+                    return state
+                except Exception as tool_exec_error:
+                    error = ToolExecutionError(
+                        tool_name=selected_tool,
+                        error_message=str(tool_exec_error),
+                        details=f"{type(tool_exec_error).__name__}: {tool_exec_error}"
+                    )
+                    tool_error = error.to_dict()
+                    state["error"] = tool_error
+                    state["final_answer"] = error.message
+                    state["messages"] = [AIMessage(content=error.message)]
+                    return state
+                finally:
+                    execution_time_ms = (time.time() - start_time) * 1000
+                    audit_logger.log_tool_call(
+                        conversation_id=state.get("session_id", "unknown"),
+                        user_id=state.get("user_id", "unknown"),
+                        tool_name=selected_tool,
+                        tool_args=tool_args,
+                        result=tool_result,
+                        error=tool_error,
+                        execution_time_ms=execution_time_ms,
+                        metadata={"selected_skill": selected_skill, "selection_reason": state.get("tool_selection_reason", "")}
+                    )
+                final_prompt = f"""基于以下工具执行结果，请给用户一个清晰、专业、友好的回答。
+用户问题：{user_question}
+工具结果：
+{json.dumps(tool_result, ensure_ascii=False, indent=2)}
+请用通俗语言解释结论并给出可执行建议。"""
+                final_response = self.llm.invoke(final_prompt)
+                state["final_answer"] = final_response.content
+                state["answer_sources"] = [{
+                    "index": 1,
+                    "tool_name": selected_tool,
+                    "document_name": f"工具: {selected_tool}",
+                    "content": f"风险等级: {tool_result.get('risk_level', 'N/A')}, 评分: {tool_result.get('risk_score', 'N/A')}",
+                    "retrieval_mode": "tool",
+                    "metadata": {
+                        "tool_args": tool_args,
+                        "risk_level": tool_result.get("risk_level"),
+                        "risk_score": tool_result.get("risk_score"),
+                        "risk_factors": tool_result.get("risk_factors", []),
+                        "recommendations": tool_result.get("recommendations", []),
+                        "selected_skill": selected_skill
+                    }
+                }]
+                state["messages"] = [AIMessage(content=final_response.content)]
+                return state
             state["final_answer"] = "抱歉，我无法从您的问题中提取足够的参数来进行评估。请提供更详细的信息。"
             state["messages"] = [AIMessage(content=state["final_answer"])]
-
         except ToolCallException as e:
-            # 已经是结构化异常，直接使用
             self.logger.error(f"工具调用异常: {e.to_dict()}")
             state["error"] = e.to_dict()
             state["final_answer"] = e.message
             state["messages"] = [AIMessage(content=e.message)]
         except Exception as e:
-            # 未预期的异常，包装为通用错误
             import traceback
             self.logger.error(f"工具调用失败: {e}")
             self.logger.error(traceback.format_exc())
-            
             from backend.agent.tools.exceptions import ToolCallErrorCode
             error = ToolCallException(
                 code=ToolCallErrorCode.UNKNOWN_ERROR,
@@ -437,7 +416,6 @@ class RAGNodes:
             state["error"] = error.to_dict()
             state["final_answer"] = error.message
             state["messages"] = [AIMessage(content=error.message)]
-
         return state
 
     def check_retrieval_needed_node(self, state: RAGGraphState, runtime: Runtime[RAGContext]) -> RAGGraphState:

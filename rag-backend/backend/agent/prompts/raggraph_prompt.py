@@ -25,6 +25,12 @@ class RetrievalTypeDecision(BaseModel):
     retrieval_type: str = Field(description="推荐的检索类型：vector_only、hybrid或graph_only")
     reasoning: str = Field(description="选择该检索类型的理由")
 
+class ToolSkillDecision(BaseModel):
+    use_assessment_skill: bool = Field(description="是否需要进入健康评估技能流程")
+    selected_tool: str | None = Field(description="命中的评估工具名，如hypertension_risk_assessment")
+    reasoning: str = Field(description="选择该技能或工具的理由")
+    missing_params: List[str] = Field(default_factory=list, description="缺失的必需参数列表")
+
 
 class RAGGraphPrompts:
     """RAG Graph 提示词集合"""
