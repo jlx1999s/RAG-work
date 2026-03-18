@@ -88,6 +88,7 @@ def test_tool_calling_should_merge_prefilled_args_with_model_args():
     assert output["answer_sources"][0]["metadata"]["tool_args"]["age"] == 18
     assert output["answer_sources"][0]["metadata"]["tool_args"]["systolic_bp"] == 120
     assert output["answer_sources"][0]["metadata"]["tool_args"]["diastolic_bp"] == 88
+    assert "免责声明" in output["final_answer"]
 
 
 def test_pending_tool_should_not_hijack_irrelevant_question():
@@ -110,6 +111,28 @@ def test_pending_tool_should_not_hijack_irrelevant_question():
     updated = nodes.check_tool_needed_node(state, runtime=None)
     assert updated["need_tool"] is False
     assert updated.get("selected_tool", "") == ""
+
+
+def test_tool_calling_emergency_question_should_append_triage_notice():
+    nodes = RAGNodes(
+        llm=_DummyLLM(),
+        tools=[_DummyTool("hypertension_risk_assessment")],
+    )
+    state = {
+        "messages": [HumanMessage(content="我胸痛且呼吸困难，systolic_bp120，diastolic_bp88，帮我做高血压风险评估")],
+        "selected_skill": "health_risk_assessment",
+        "selected_tool": "hypertension_risk_assessment",
+        "tool_missing_params": [],
+        "tool_selection_reason": "命中高血压评估工具",
+        "tool_prefilled_args": {"age": 50, "systolic_bp": 120, "diastolic_bp": 88},
+        "session_id": "test_session",
+        "user_id": "test_user",
+    }
+
+    output = nodes.tool_calling_node(state, runtime=None)
+
+    assert "免责声明" in output["final_answer"]
+    assert "120" in output["final_answer"] or "急诊" in output["final_answer"]
 
 
 def test_expired_pending_tool_should_be_cleared():

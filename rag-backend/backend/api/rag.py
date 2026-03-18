@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import time
 import re
 from pathlib import Path
@@ -31,6 +32,7 @@ router = APIRouter(
 
 logger = get_logger(__name__)
 eval_tasks: Dict[str, Dict[str, Any]] = {}
+EVAL_TASK_RETENTION_SECONDS = int(os.getenv("RAG_EVAL_TASK_RETENTION_SECONDS", "3600"))
 
 class EvalRequest(BaseModel):
     dataset_jsonl: str
@@ -45,12 +47,85 @@ class EvalRequest(BaseModel):
     include_item_details: bool = True
     cache_enabled: Optional[bool] = None
     cache_namespace: Optional[str] = None
+    ragas_limit: int = 10
 
 
 class SaveEvalDatasetRequest(BaseModel):
     name: str
     content: str
     overwrite: bool = False
+
+
+VALID_RETRIEVAL_MODES = {
+    RetrievalMode.VECTOR_ONLY,
+    RetrievalMode.GRAPH_ONLY,
+    RetrievalMode.HYBRID,
+    RetrievalMode.NO_RETRIEVAL,
+    RetrievalMode.AUTO
+}
+
+
+def _sanitize_user_scope(user_id: Any) -> str:
+    user_scope = str(user_id or "").strip() or "anonymous"
+    return re.sub(r"[^0-9A-Za-z_\-]", "_", user_scope)
+
+
+def _normalize_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _first_non_empty_text(value: Any) -> str:
+    if isinstance(value, list):
+        for item in value:
+            text = _normalize_text(item)
+            if text:
+                return text
+        return ""
+    return _normalize_text(value)
+
+
+def _resolve_reference_text(row: Dict[str, Any]) -> str:
+    return (
+        _first_non_empty_text(row.get("reference"))
+        or _first_non_empty_text(row.get("answer"))
+        or _first_non_empty_text(row.get("ground_truths"))
+        or _first_non_empty_text(row.get("answers"))
+    )
+
+
+def _message_content_to_text(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: List[str] = []
+        for block in content:
+            if isinstance(block, dict):
+                block_text = block.get("text")
+                if block_text:
+                    parts.append(str(block_text))
+            else:
+                parts.append(str(block))
+        return "\n".join(part for part in parts if part).strip()
+    return str(content).strip()
+
+
+def _extract_answer_from_messages(messages: Any) -> str:
+    if not isinstance(messages, list) or not messages:
+        return ""
+    for message in reversed(messages):
+        if message is None:
+            continue
+        content = getattr(message, "content", None)
+        if content is None and isinstance(message, dict):
+            content = message.get("content")
+        text = _message_content_to_text(content)
+        if text:
+            return text
+    return ""
 
 
 def _safe_float(value: Any) -> Optional[float]:
@@ -153,23 +228,35 @@ def _build_stability_summary(items: List[Dict[str, Any]]) -> Dict[str, Any]:
         return {"total_items": 0}
     failed = sum(1 for item in items if item.get("status") == "error")
     empty_answer = sum(1 for item in items if not (item.get("answer") or "").strip())
+    abstained_answer = sum(1 for item in items if _is_abstained_answer(item.get("answer")))
     return {
         "total_items": total,
         "failed_items": failed,
         "success_items": total - failed,
         "error_rate": _safe_float(_safe_divide(failed, total)),
         "empty_answer_count": empty_answer,
-        "empty_answer_rate": _safe_float(_safe_divide(empty_answer, total))
+        "empty_answer_rate": _safe_float(_safe_divide(empty_answer, total)),
+        "abstained_answer_count": abstained_answer,
+        "abstained_answer_rate": _safe_float(_safe_divide(abstained_answer, total))
     }
 
 
 def _parse_dataset_jsonl(raw_text: str) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
-    for line in raw_text.splitlines():
+    for line_no, line in enumerate(raw_text.splitlines(), start=1):
         stripped = line.strip()
         if not stripped:
             continue
-        rows.append(json.loads(stripped))
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"第{line_no}行JSON格式错误: {exc.msg}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(f"第{line_no}行必须是JSON对象")
+        question = _normalize_text(parsed.get("question") or parsed.get("query"))
+        if not question:
+            raise ValueError(f"第{line_no}行缺少question或query字段")
+        rows.append(parsed)
     return rows
 
 
@@ -194,18 +281,31 @@ def _run_single_evaluation(
     start_time = time.time()
     input_data = {"messages": [{"role": "user", "content": question}]}
     output = rag_graph.invoke(input_data, context=context)
-    answer = output.get("final_answer") or ""
-    contexts = output.get("retrieved_docs") or []
+    answer = ""
+    contexts: List[Any] = []
+    fusion_stats: Dict[str, Any] = {}
+    if isinstance(output, dict):
+        answer = _normalize_text(output.get("final_answer"))
+        if not answer:
+            answer = _extract_answer_from_messages(output.get("messages") or [])
+        contexts = output.get("retrieved_docs") or []
+        fusion_stats = output.get("retrieval_fusion_stats") or {}
+    else:
+        answer = _normalize_text(output)
     normalized_contexts = []
     retrieval_sources: Dict[str, int] = {}
     contexts_total_chars = 0
     for ctx in contexts:
         if ctx is None:
             continue
-        metadata = getattr(ctx, "metadata", {}) or {}
+        if isinstance(ctx, dict):
+            metadata = ctx.get("metadata") or {}
+            page_content = ctx.get("page_content")
+        else:
+            metadata = getattr(ctx, "metadata", {}) or {}
+            page_content = getattr(ctx, "page_content", None)
         source_name = str(metadata.get("source") or "unknown")
         retrieval_sources[source_name] = retrieval_sources.get(source_name, 0) + 1
-        page_content = getattr(ctx, "page_content", None)
         if page_content is not None:
             content_text = str(page_content)
             normalized_contexts.append(content_text)
@@ -218,11 +318,32 @@ def _run_single_evaluation(
     return {
         "answer": answer,
         "contexts": normalized_contexts,
-        "retrieval_fusion_stats": output.get("retrieval_fusion_stats") or {},
+        "retrieval_fusion_stats": fusion_stats,
         "retrieval_sources": retrieval_sources,
         "contexts_total_chars": contexts_total_chars,
         "latency_ms": elapsed_ms
     }
+
+
+def _tokenize_for_overlap(text: str) -> set[str]:
+    raw_text = _normalize_text(text).lower()
+    if not raw_text:
+        return set()
+    return set(re.findall(r"[a-z0-9_]+|[\u4e00-\u9fff]", raw_text))
+
+
+def _is_abstained_answer(answer: Any) -> bool:
+    text = _normalize_text(answer).lower()
+    if not text:
+        return True
+    markers = [
+        "未在给定上下文中找到答案",
+        "无法根据提供的上下文",
+        "根据提供的上下文无法",
+        "not found in the provided context",
+        "cannot answer from the provided context"
+    ]
+    return any(marker.lower() in text for marker in markers)
 
 
 def _fallback_metrics(items: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -231,18 +352,18 @@ def _fallback_metrics(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     precision_scores = []
     recall_scores = []
     for item in items:
-        reference = item.get("reference") or ""
+        reference = _normalize_text(item.get("reference"))
         contexts = item.get("contexts") or []
         if not reference:
             precision_scores.append(None)
             recall_scores.append(None)
             continue
-        reference_tokens = set(reference.split())
+        reference_tokens = _tokenize_for_overlap(reference)
         if not reference_tokens:
             precision_scores.append(None)
             recall_scores.append(None)
             continue
-        context_tokens = set(" ".join(contexts).split()) if contexts else set()
+        context_tokens = _tokenize_for_overlap(" ".join(str(ctx) for ctx in contexts)) if contexts else set()
         if not context_tokens:
             precision_scores.append(0.0)
             recall_scores.append(0.0)
@@ -307,19 +428,36 @@ def _build_cost_summary(items: List[Dict[str, Any]], elapsed_ms: int) -> Dict[st
     }
 
 
-def _get_eval_dataset_dir() -> Path:
-    return Path(__file__).resolve().parent.parent / "tests"
+def _get_eval_dataset_dir(current_user: Any) -> Path:
+    root = Path(__file__).resolve().parent.parent / "tests" / "eval_datasets"
+    return root / f"user_{_sanitize_user_scope(current_user)}"
 
 
-def _list_eval_dataset_files() -> List[Path]:
-    dataset_dir = _get_eval_dataset_dir()
+def _list_eval_dataset_files(current_user: Any) -> List[Path]:
+    dataset_dir = _get_eval_dataset_dir(current_user)
     if not dataset_dir.exists():
         return []
     return sorted([p for p in dataset_dir.glob("*.jsonl") if p.is_file()])
 
 
 def _get_eval_history_path() -> Path:
-    return _get_eval_dataset_dir() / "eval_history.jsonl"
+    return Path(__file__).resolve().parent.parent / "tests" / "eval_history.jsonl"
+
+
+def _prune_eval_tasks(now_ts: Optional[float] = None) -> None:
+    now = now_ts or time.time()
+    stale_ids: List[str] = []
+    for task_id, task in eval_tasks.items():
+        status = task.get("status")
+        finished_at = task.get("finished_at")
+        if status not in {"completed", "failed"}:
+            continue
+        if not isinstance(finished_at, (int, float)):
+            continue
+        if now - float(finished_at) > EVAL_TASK_RETENTION_SECONDS:
+            stale_ids.append(task_id)
+    for task_id in stale_ids:
+        eval_tasks.pop(task_id, None)
 
 
 def _append_eval_history(record: Dict[str, Any]) -> None:
@@ -349,6 +487,14 @@ def _load_eval_history() -> List[Dict[str, Any]]:
     return rows
 
 
+def _find_eval_history_row(history_id: str, current_user: Any) -> Optional[Dict[str, Any]]:
+    rows = _load_eval_history()
+    for row in rows:
+        if row.get("id") == history_id and str(row.get("user_id")) == str(current_user):
+            return row
+    return None
+
+
 @router.get("/query")
 async def query_rag(q: str):
     return {"query": q, "results": []}
@@ -368,7 +514,18 @@ async def evaluate_rag(payload: EvalRequest, current_user: int = Depends(get_cur
 
 async def _evaluate_payload(payload: EvalRequest, current_user: int) -> Dict[str, Any]:
     start_time = time.time()
-    rows = _parse_dataset_jsonl(payload.dataset_jsonl)
+    if payload.limit is not None and payload.limit < 0:
+        return {"error": "limit不能为负数"}
+    if payload.max_retrieval_docs <= 0:
+        return {"error": "max_retrieval_docs必须大于0"}
+    if payload.ragas_limit < 0:
+        return {"error": "ragas_limit不能为负数"}
+    if payload.retrieval_mode not in VALID_RETRIEVAL_MODES:
+        return {"error": f"不支持的retrieval_mode: {payload.retrieval_mode}"}
+    try:
+        rows = _parse_dataset_jsonl(payload.dataset_jsonl)
+    except Exception as exc:
+        return {"error": f"评测数据格式错误: {str(exc)}"}
     total_rows = len(rows)
     if payload.limit and payload.limit > 0:
         rows = rows[:payload.limit]
@@ -393,8 +550,8 @@ async def _evaluate_payload(payload: EvalRequest, current_user: int) -> Dict[str
     items: List[Dict[str, Any]] = []
     fusion_stats_rows: List[Dict[str, Any]] = []
     for row in rows:
-        question = row.get("question") or row.get("query") or ""
-        reference = row.get("reference") or row.get("answer") or ""
+        question = _normalize_text(row.get("question") or row.get("query"))
+        reference = _resolve_reference_text(row)
         if not question:
             continue
         item_record: Dict[str, Any] = {
@@ -439,10 +596,34 @@ async def _evaluate_payload(payload: EvalRequest, current_user: int) -> Dict[str
                 "error": str(exc)
             })
         items.append(item_record)
+    if not items:
+        return {"error": "评测数据中未找到有效问题"}
+    retrieval_elapsed_ms = int((time.time() - start_time) * 1000)
     metrics_result: Dict[str, Any] = {"metrics": {}, "items": items}
+    ragas_elapsed_ms = 0
+    ragas_evaluated_rows = 0
+    warning_messages: List[str] = []
     if payload.enable_ragas:
         try:
-            metrics_result = await run_in_threadpool(_run_ragas_eval, items)
+            ragas_items = items
+            if payload.ragas_limit > 0 and payload.ragas_limit < len(items):
+                ragas_items = items[:payload.ragas_limit]
+            ragas_start = time.time()
+            metrics_result = await run_in_threadpool(_run_ragas_eval, ragas_items)
+            ragas_elapsed_ms = int((time.time() - ragas_start) * 1000)
+            ragas_evaluated_rows = len(ragas_items)
+            if len(ragas_items) < len(items):
+                for item in items[len(ragas_items):]:
+                    item["metrics"] = {
+                        "context_precision": None,
+                        "context_recall": None,
+                        "answer_relevancy": None,
+                        "faithfulness": None
+                    }
+                metrics_result["items"] = items
+                warning_messages.append(
+                    f"RAGAS仅评测前{len(ragas_items)}条样本以控制耗时，可将ragas_limit设为0进行全量评测"
+                )
         except Exception as exc:
             logger.error(f"RAGAS评测失败: {exc}")
             fallback = _fallback_metrics(items)
@@ -453,7 +634,8 @@ async def _evaluate_payload(payload: EvalRequest, current_user: int) -> Dict[str
                     "answer_relevancy": None,
                     "faithfulness": None
                 }
-            metrics_result = {"metrics": fallback, "items": items, "warning": "RAGAS评测失败，已返回基础指标"}
+            metrics_result = {"metrics": fallback, "items": items}
+            warning_messages.append("RAGAS评测失败，已返回基础指标")
     else:
         fallback = _fallback_metrics(items)
         for item in items:
@@ -463,14 +645,27 @@ async def _evaluate_payload(payload: EvalRequest, current_user: int) -> Dict[str
                 "answer_relevancy": None,
                 "faithfulness": None
             }
-        metrics_result = {"metrics": fallback, "items": items, "warning": "已关闭RAGAS，仅返回基础指标"}
+        metrics_result = {"metrics": fallback, "items": items}
+        warning_messages.append("已关闭RAGAS，仅返回基础指标")
     elapsed_ms = int((time.time() - start_time) * 1000)
     evaluated_items = metrics_result.get("items", items)
     fusion_summary = _aggregate_fusion_stats(fusion_stats_rows)
     retrieval_summary = _build_retrieval_summary(evaluated_items, fusion_stats_rows)
     performance_summary = _build_performance_summary(evaluated_items, elapsed_ms)
     stability_summary = _build_stability_summary(evaluated_items)
+    performance_summary.update({
+        "retrieval_generation_elapsed_ms": retrieval_elapsed_ms,
+        "ragas_elapsed_ms": ragas_elapsed_ms,
+        "non_retrieval_overhead_ms": max(0, elapsed_ms - retrieval_elapsed_ms - ragas_elapsed_ms),
+        "ragas_evaluated_rows": ragas_evaluated_rows
+    })
     cost_summary = _build_cost_summary(evaluated_items, elapsed_ms)
+    abstained_rate = stability_summary.get("abstained_answer_rate")
+    if isinstance(abstained_rate, (int, float)) and abstained_rate >= 0.4:
+        warning_messages.append("较多回答为“未在给定上下文中找到答案”，请检查评测数据集与所选知识库是否匹配")
+    if metrics_result.get("warning"):
+        warning_messages.append(str(metrics_result.get("warning")))
+    warning_text = "；".join(dict.fromkeys([msg for msg in warning_messages if msg])) or None
     cache_summary = {
         "enabled": payload.cache_enabled,
         "namespace": payload.cache_namespace,
@@ -494,6 +689,7 @@ async def _evaluate_payload(payload: EvalRequest, current_user: int) -> Dict[str
             "retrieval_mode": payload.retrieval_mode,
             "max_retrieval_docs": payload.max_retrieval_docs,
             "enable_ragas": payload.enable_ragas,
+            "ragas_limit": payload.ragas_limit,
             "limit": payload.limit or 0
         },
         "quality_summary": metrics_result.get("metrics", {}),
@@ -515,7 +711,7 @@ async def _evaluate_payload(payload: EvalRequest, current_user: int) -> Dict[str
         "items": evaluated_items if payload.include_item_details else [],
         "elapsed_ms": elapsed_ms,
         "total": len(evaluated_items),
-        "warning": metrics_result.get("warning")
+        "warning": warning_text
     }
     try:
         record = {
@@ -569,9 +765,11 @@ async def _run_eval_task(task_id: str, payload: EvalRequest, current_user: int) 
 
 @router.post("/evaluate-async")
 async def evaluate_rag_async(payload: EvalRequest, current_user: int = Depends(get_current_user)):
+    _prune_eval_tasks()
     task_id = str(uuid4())
     eval_tasks[task_id] = {
         "status": "queued",
+        "user_id": str(current_user),
         "submitted_at": time.time(),
         "result": None,
         "error": None
@@ -582,8 +780,9 @@ async def evaluate_rag_async(payload: EvalRequest, current_user: int = Depends(g
 
 @router.get("/evaluate-status/{task_id}")
 async def evaluate_rag_status(task_id: str, current_user: int = Depends(get_current_user)):
+    _prune_eval_tasks()
     task = eval_tasks.get(task_id)
-    if not task:
+    if not task or str(task.get("user_id")) != str(current_user):
         return Response.error("评测任务不存在")
     payload = {
         "task_id": task_id,
@@ -600,7 +799,7 @@ async def evaluate_rag_status(task_id: str, current_user: int = Depends(get_curr
 @router.get("/eval-datasets")
 async def list_eval_datasets(current_user: int = Depends(get_current_user)):
     items: List[Dict[str, Any]] = []
-    for path in _list_eval_dataset_files():
+    for path in _list_eval_dataset_files(current_user):
         try:
             with path.open("r", encoding="utf-8") as f:
                 line_count = sum(1 for line in f if line.strip())
@@ -626,7 +825,7 @@ async def save_eval_dataset(payload: SaveEvalDatasetRequest, current_user: int =
             return Response.error("评测数据内容为空或格式不正确")
     except Exception as exc:
         return Response.error(str(exc))
-    dataset_dir = _get_eval_dataset_dir()
+    dataset_dir = _get_eval_dataset_dir(current_user)
     dataset_dir.mkdir(parents=True, exist_ok=True)
     path = dataset_dir / dataset_name
     if path.exists() and not payload.overwrite:
@@ -647,7 +846,7 @@ async def save_eval_dataset(payload: SaveEvalDatasetRequest, current_user: int =
 async def get_eval_dataset(dataset_name: str, current_user: int = Depends(get_current_user)):
     if "/" in dataset_name or "\\" in dataset_name:
         return Response.error("评测数据集不存在")
-    dataset_dir = _get_eval_dataset_dir()
+    dataset_dir = _get_eval_dataset_dir(current_user)
     path = dataset_dir / dataset_name
     if not path.exists() or path.suffix.lower() != ".jsonl":
         return Response.error("评测数据集不存在")
@@ -677,9 +876,66 @@ async def list_eval_history(limit: int = 50, current_user: int = Depends(get_cur
 
 
 @router.get("/eval-history/{history_id}")
-async def get_eval_history(history_id: str, current_user: int = Depends(get_current_user)):
-    rows = _load_eval_history()
-    for row in rows:
-        if row.get("id") == history_id and str(row.get("user_id")) == str(current_user):
-            return Response.success(row)
+async def get_eval_history(
+    history_id: str,
+    include_items: bool = True,
+    current_user: int = Depends(get_current_user)
+):
+    row = _find_eval_history_row(history_id, current_user)
+    if row:
+        record = dict(row)
+        if not include_items:
+            result = dict(record.get("result") or {})
+            items = result.get("items") or []
+            if isinstance(items, list):
+                result.pop("items", None)
+                result["items_count"] = len(items)
+            record["result"] = result
+        return Response.success(record)
     return Response.error("评测历史不存在")
+
+
+@router.get("/eval-history/{history_id}/items")
+async def get_eval_history_items(
+    history_id: str,
+    page: int = 1,
+    page_size: int = 10,
+    current_user: int = Depends(get_current_user)
+):
+    page = max(1, page)
+    page_size = max(1, min(page_size, 50))
+    row = _find_eval_history_row(history_id, current_user)
+    if not row:
+        return Response.error("评测历史不存在")
+
+    result = row.get("result") or {}
+    all_items = result.get("items") or []
+    if not isinstance(all_items, list):
+        all_items = []
+
+    total_items = len(all_items)
+    total_pages = max(1, (total_items + page_size - 1) // page_size) if total_items > 0 else 1
+    page = min(page, total_pages)
+    start_idx = (page - 1) * page_size
+    end_idx = start_idx + page_size
+    page_items = all_items[start_idx:end_idx]
+
+    latencies = [float(item.get("latency_ms")) for item in all_items if isinstance(item.get("latency_ms"), (int, float))]
+    contexts_counts = [int(item.get("contexts_count") or 0) for item in all_items]
+    error_count = sum(1 for item in all_items if item.get("status") == "error")
+    abstained_count = sum(1 for item in all_items if _is_abstained_answer(item.get("answer")))
+
+    return Response.success({
+        "history_id": history_id,
+        "page": page,
+        "page_size": page_size,
+        "total_items": total_items,
+        "total_pages": total_pages,
+        "items": page_items,
+        "stats": {
+            "error_count": error_count,
+            "abstained_count": abstained_count,
+            "avg_latency_ms": round(sum(latencies) / len(latencies), 2) if latencies else None,
+            "avg_contexts_count": round(sum(contexts_counts) / len(contexts_counts), 2) if contexts_counts else None
+        }
+    })

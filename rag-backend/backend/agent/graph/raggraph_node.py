@@ -104,6 +104,23 @@ class RAGNodes:
         self.key_clause_bonus = float(os.getenv("RAG_KEY_CLAUSE_BONUS", "0.015"))
         self.evidence_level_bonus = float(os.getenv("RAG_EVIDENCE_LEVEL_BONUS", "0.012"))
         self.assessment_skill_name = "health_risk_assessment"
+        self.medical_safety_enabled = os.getenv("RAG_MEDICAL_SAFETY_ENABLED", "true").lower() in {"true", "1", "yes", "on"}
+        self.medical_disclaimer_text = os.getenv(
+            "RAG_MEDICAL_DISCLAIMER_TEXT",
+            "免责声明：以下内容仅供健康科普与信息参考，不能替代执业医生的面诊诊断与个体化治疗建议。"
+        ).strip()
+        self.medical_emergency_text = os.getenv(
+            "RAG_MEDICAL_EMERGENCY_TEXT",
+            "如出现胸痛、呼吸困难、意识障碍、抽搐、持续高热不退或活动性出血等紧急情况，请立即拨打120或尽快前往急诊。"
+        ).strip()
+        self.medical_domain_markers = self._parse_env_list(
+            os.getenv("RAG_MEDICAL_DOMAIN_MARKERS"),
+            ["疾病", "症状", "诊断", "治疗", "用药", "副作用", "禁忌", "血压", "血糖", "糖尿病", "高血压", "发热", "发烧", "heart", "diabetes", "hypertension"]
+        )
+        self.medical_emergency_markers = self._parse_env_list(
+            os.getenv("RAG_MEDICAL_EMERGENCY_MARKERS"),
+            ["胸痛", "呼吸困难", "意识障碍", "昏迷", "抽搐", "大出血", "活动性出血", "持续高热", "高热不退", "stroke", "seizure", "unconscious", "急救", "急诊", "120"]
+        )
         self.tool_pending_ttl_seconds = float(os.getenv("RAG_TOOL_PENDING_TTL_SECONDS", "180"))
         self.enable_subquestion_expansion = os.getenv("RAG_ENABLE_SUBQUESTION_EXPANSION", "true").lower() in {"true", "1", "yes", "on"}
         self.subquestion_max_count = int(os.getenv("RAG_SUBQUESTION_MAX_COUNT", "3"))
@@ -250,6 +267,48 @@ class RAGNodes:
         if value is None:
             return default
         return bool(value)
+
+    def _is_medical_text(self, text: str) -> bool:
+        raw_text = str(text or "").lower()
+        if not raw_text:
+            return False
+        return any(marker.lower() in raw_text for marker in self.medical_domain_markers)
+
+    def _is_emergency_text(self, text: str) -> bool:
+        raw_text = str(text or "").lower()
+        if not raw_text:
+            return False
+        return any(marker.lower() in raw_text for marker in self.medical_emergency_markers)
+
+    def _apply_medical_safety_notice(
+        self,
+        question: str,
+        answer: str,
+        *,
+        force_medical: bool = False
+    ) -> str:
+        final_answer = str(answer or "").strip()
+        if not final_answer:
+            return final_answer
+        if not self.medical_safety_enabled:
+            return final_answer
+
+        question_text = str(question or "").strip()
+        answer_text = final_answer
+        combined_text = f"{question_text}\n{answer_text}".strip()
+        is_medical = force_medical or self._is_medical_text(combined_text)
+        if not is_medical:
+            return final_answer
+
+        output_parts = [final_answer]
+        if self.medical_disclaimer_text and self.medical_disclaimer_text not in answer_text:
+            output_parts.append(self.medical_disclaimer_text)
+
+        emergency_hit = self._is_emergency_text(question_text) or self._is_emergency_text(answer_text)
+        if emergency_hit and self.medical_emergency_text and self.medical_emergency_text not in answer_text:
+            output_parts.append(self.medical_emergency_text)
+
+        return "\n\n".join(part for part in output_parts if part).strip()
 
     def _build_default_rule_library(self) -> dict:
         retrieval_rules = []
@@ -1255,22 +1314,25 @@ class RAGNodes:
         clarify_message = state.get("tool_clarify_message")
         if clarify_message:
             self._clear_pending_tool_state(state)
-            state["final_answer"] = clarify_message
-            state["messages"] = [AIMessage(content=clarify_message)]
+            safe_answer = self._apply_medical_safety_notice(user_question, clarify_message, force_medical=True)
+            state["final_answer"] = safe_answer
+            state["messages"] = [AIMessage(content=safe_answer)]
             return state
         missing_params = state.get("tool_missing_params", [])
         if missing_params:
             self._set_pending_tool_state(state, selected_tool or "")
             answer = self._build_missing_params_answer(selected_tool or "", missing_params)
-            state["final_answer"] = answer
-            state["messages"] = [AIMessage(content=answer)]
+            safe_answer = self._apply_medical_safety_notice(user_question, answer, force_medical=True)
+            state["final_answer"] = safe_answer
+            state["messages"] = [AIMessage(content=safe_answer)]
             return state
         if not selected_tool or selected_tool not in self.tool_map:
             available_tools = list(self.tool_map.keys())
             error = ToolNotFoundError(tool_name=selected_tool or "unknown", available_tools=available_tools)
             state["error"] = error.to_dict()
-            state["final_answer"] = error.message
-            state["messages"] = [AIMessage(content=error.message)]
+            safe_answer = self._apply_medical_safety_notice(user_question, error.message, force_medical=True)
+            state["final_answer"] = safe_answer
+            state["messages"] = [AIMessage(content=safe_answer)]
             return state
         bound_tool = self.tool_map[selected_tool]
         required_params = self.assessment_profiles.get(selected_tool, {}).get("required_params", [])
@@ -1291,8 +1353,13 @@ class RAGNodes:
                 audit_logger = get_audit_logger()
                 target_calls = [call for call in response.tool_calls if call.get("name") == selected_tool]
                 if not target_calls:
-                    state["final_answer"] = f"评估执行失败：模型未按要求调用 {selected_tool}。请重试或补充更明确参数。"
-                    state["messages"] = [AIMessage(content=state["final_answer"])]
+                    safe_answer = self._apply_medical_safety_notice(
+                        user_question,
+                        f"评估执行失败：模型未按要求调用 {selected_tool}。请重试或补充更明确参数。",
+                        force_medical=True
+                    )
+                    state["final_answer"] = safe_answer
+                    state["messages"] = [AIMessage(content=safe_answer)]
                     return state
                 selected_call = target_calls[0]
                 model_args = selected_call.get("args", {}) or {}
@@ -1308,8 +1375,13 @@ class RAGNodes:
                         details="工具参数预校验失败"
                     )
                     state["error"] = error.to_dict()
-                    state["final_answer"] = f"{error.message}，请补充或修正参数后重试。"
-                    state["messages"] = [AIMessage(content=state["final_answer"])]
+                    safe_answer = self._apply_medical_safety_notice(
+                        user_question,
+                        f"{error.message}，请补充或修正参数后重试。",
+                        force_medical=True
+                    )
+                    state["final_answer"] = safe_answer
+                    state["messages"] = [AIMessage(content=safe_answer)]
                     return state
                 start_time = time.time()
                 tool_result = None
@@ -1320,8 +1392,9 @@ class RAGNodes:
                 except ToolExecutionTimeoutError as timeout_error:
                     tool_error = timeout_error.to_dict()
                     state["error"] = tool_error
-                    state["final_answer"] = timeout_error.message
-                    state["messages"] = [AIMessage(content=timeout_error.message)]
+                    safe_answer = self._apply_medical_safety_notice(user_question, timeout_error.message, force_medical=True)
+                    state["final_answer"] = safe_answer
+                    state["messages"] = [AIMessage(content=safe_answer)]
                     return state
                 except Exception as tool_exec_error:
                     error = ToolExecutionError(
@@ -1331,8 +1404,9 @@ class RAGNodes:
                     )
                     tool_error = error.to_dict()
                     state["error"] = tool_error
-                    state["final_answer"] = error.message
-                    state["messages"] = [AIMessage(content=error.message)]
+                    safe_answer = self._apply_medical_safety_notice(user_question, error.message, force_medical=True)
+                    state["final_answer"] = safe_answer
+                    state["messages"] = [AIMessage(content=safe_answer)]
                     return state
                 finally:
                     execution_time_ms = (time.time() - start_time) * 1000
@@ -1352,7 +1426,8 @@ class RAGNodes:
 {json.dumps(tool_result, ensure_ascii=False, indent=2)}
 请用通俗语言解释结论并给出可执行建议。"""
                 final_response = self.llm.invoke(final_prompt)
-                state["final_answer"] = final_response.content
+                safe_answer = self._apply_medical_safety_notice(user_question, final_response.content, force_medical=True)
+                state["final_answer"] = safe_answer
                 self._clear_pending_tool_state(state)
                 state["answer_sources"] = [{
                     "index": 1,
@@ -1369,15 +1444,21 @@ class RAGNodes:
                         "selected_skill": selected_skill
                     }
                 }]
-                state["messages"] = [AIMessage(content=final_response.content)]
+                state["messages"] = [AIMessage(content=safe_answer)]
                 return state
-            state["final_answer"] = "抱歉，我无法从您的问题中提取足够的参数来进行评估。请提供更详细的信息。"
-            state["messages"] = [AIMessage(content=state["final_answer"])]
+            safe_answer = self._apply_medical_safety_notice(
+                user_question,
+                "抱歉，我无法从您的问题中提取足够的参数来进行评估。请提供更详细的信息。",
+                force_medical=True
+            )
+            state["final_answer"] = safe_answer
+            state["messages"] = [AIMessage(content=safe_answer)]
         except ToolCallException as e:
             self.logger.error(f"工具调用异常: {e.to_dict()}")
             state["error"] = e.to_dict()
-            state["final_answer"] = e.message
-            state["messages"] = [AIMessage(content=e.message)]
+            safe_answer = self._apply_medical_safety_notice(user_question, e.message, force_medical=True)
+            state["final_answer"] = safe_answer
+            state["messages"] = [AIMessage(content=safe_answer)]
         except Exception as e:
             import traceback
             self.logger.error(f"工具调用失败: {e}")
@@ -1390,8 +1471,9 @@ class RAGNodes:
                 metadata={"original_error": str(e)}
             )
             state["error"] = error.to_dict()
-            state["final_answer"] = error.message
-            state["messages"] = [AIMessage(content=error.message)]
+            safe_answer = self._apply_medical_safety_notice(user_question, error.message, force_medical=True)
+            state["final_answer"] = safe_answer
+            state["messages"] = [AIMessage(content=safe_answer)]
         return state
 
     def check_retrieval_needed_node(self, state: RAGGraphState, runtime: Runtime[RAGContext]) -> RAGGraphState:
@@ -2440,6 +2522,11 @@ class RAGNodes:
                 answer_content,
                 fallback_docs
             )
+            answer_content = self._apply_medical_safety_notice(
+                original_question,
+                answer_content,
+                force_medical=False
+            )
 
             # 更新状态
             state["final_answer"] = answer_content
@@ -2511,6 +2598,7 @@ class RAGNodes:
             )
             response = self.llm.invoke(prompt)
             answer = response.content
+            answer = self._apply_medical_safety_notice(user_question, answer, force_medical=False)
 
             state["final_answer"] = answer
             state["messages"] = [AIMessage(content=answer)]

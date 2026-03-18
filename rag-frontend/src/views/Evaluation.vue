@@ -9,6 +9,7 @@ import {
   getEvalDatasetContent,
   getRagEvaluationStatus,
   getEvalHistory,
+  getEvalHistoryItems,
   listEvalHistory,
   listEvalDatasets,
   saveEvalDataset,
@@ -29,6 +30,7 @@ const workspace = ref('eval_ws')
 const collectionId = ref('')
 const runTag = ref('')
 const enableRagas = ref(true)
+const ragasLimit = ref(10)
 const includeItemDetails = ref(true)
 const cacheEnabled = ref(false)
 const cacheNamespace = ref('eval-default')
@@ -48,6 +50,12 @@ const historyLoading = ref(false)
 const historyDetailLoading = ref(false)
 const historyDetail = ref(null)
 const selectedHistoryId = ref('')
+const historyItems = ref([])
+const historyItemsLoading = ref(false)
+const historyItemsPage = ref(1)
+const historyItemsPageSize = ref(5)
+const historyItemsTotal = ref(0)
+const historyItemsStats = ref(null)
 let pollTimer = null
 
 const datasetCount = computed(() => {
@@ -132,6 +140,23 @@ const resultCost = computed(() => {
 
 const resultCache = computed(() => {
   return result.value?.run?.cache_summary ?? result.value?.cache_summary ?? null
+})
+
+const historyDetailSummary = computed(() => {
+  return historyDetail.value?.result?.run?.quality_summary ?? historyDetail.value?.result?.summary ?? null
+})
+
+const historyDetailStability = computed(() => {
+  return historyDetail.value?.result?.run?.stability_summary ?? historyDetail.value?.result?.stability_summary ?? null
+})
+
+const historyItemsTotalPages = computed(() => {
+  if (!historyItemsTotal.value || historyItemsTotal.value <= 0) return 1
+  return Math.max(1, Math.ceil(historyItemsTotal.value / historyItemsPageSize.value))
+})
+
+const historyItemsAvailable = computed(() => {
+  return historyItemsTotal.value > 0
 })
 
 const sourceEntries = computed(() => {
@@ -250,14 +275,54 @@ const loadHistories = async () => {
   }
 }
 
+const resetHistoryItems = () => {
+  historyItems.value = []
+  historyItemsPage.value = 1
+  historyItemsTotal.value = 0
+  historyItemsStats.value = null
+}
+
+const loadHistoryItems = async (historyId, page = 1) => {
+  if (!historyId) return
+  historyItemsLoading.value = true
+  try {
+    const response = await getEvalHistoryItems(historyId, {
+      page,
+      page_size: historyItemsPageSize.value
+    })
+    if (response.status === 200) {
+      const payload = response.data || {}
+      historyItems.value = payload.items || []
+      historyItemsPage.value = payload.page || page
+      historyItemsTotal.value = payload.total_items || 0
+      historyItemsStats.value = payload.stats || null
+    } else {
+      throw new Error(response.msg || '加载历史样本失败')
+    }
+  } catch (error) {
+    ElMessage.error(error.message || '加载历史样本失败')
+  } finally {
+    historyItemsLoading.value = false
+  }
+}
+
+const changeHistoryItemsPage = async (nextPage) => {
+  if (!selectedHistoryId.value) return
+  const targetPage = Math.max(1, Math.min(nextPage, historyItemsTotalPages.value))
+  if (targetPage === historyItemsPage.value) return
+  await loadHistoryItems(selectedHistoryId.value, targetPage)
+}
+
 const viewHistory = async (historyId) => {
   if (!historyId) return
   selectedHistoryId.value = historyId
+  resetHistoryItems()
   historyDetailLoading.value = true
   try {
-    const response = await getEvalHistory(historyId)
+    const response = await getEvalHistory(historyId, { include_items: false })
     if (response.status === 200) {
       historyDetail.value = response.data || null
+      await loadHistoryItems(historyId, 1)
     } else {
       throw new Error(response.msg || '加载评测历史详情失败')
     }
@@ -268,8 +333,24 @@ const viewHistory = async (historyId) => {
   }
 }
 
-const applyHistoryResult = (payload) => {
-  const historyPayload = payload?.result || payload
+const applyHistoryResult = async (payload) => {
+  let historyPayload = payload?.result || payload
+  const historyId = payload?.id
+  const needFullItems =
+    historyId &&
+    (!Array.isArray(historyPayload?.items) || historyPayload.items.length === 0)
+
+  if (needFullItems) {
+    try {
+      const response = await getEvalHistory(historyId, { include_items: true })
+      if (response.status === 200) {
+        historyPayload = response.data?.result || historyPayload
+      }
+    } catch (error) {
+      ElMessage.warning(error.message || '加载完整历史详情失败，已使用摘要结果')
+    }
+  }
+
   if (historyPayload) {
     result.value = historyPayload
     ElMessage.success('已加载历史评测结果')
@@ -360,6 +441,7 @@ const runEvaluation = async () => {
       collection_id: collectionId.value || null,
       run_tag: runTag.value.trim() || null,
       enable_ragas: Boolean(enableRagas.value),
+      ragas_limit: Number(ragasLimit.value) || 0,
       include_item_details: Boolean(includeItemDetails.value),
       cache_enabled: Boolean(cacheEnabled.value),
       cache_namespace: cacheNamespace.value.trim() || null,
@@ -497,6 +579,7 @@ onUnmounted(() => {
               <label class="text-xs font-medium text-gray-500">检索模式</label>
               <select v-model="retrievalMode" class="input mt-2">
                 <option value="vector_only">向量检索</option>
+                <option value="hybrid">融合检索</option>
                 <option value="graph_only">图检索</option>
                 <option value="auto">自动选择</option>
                 <option value="no_retrieval">不检索</option>
@@ -524,6 +607,19 @@ onUnmounted(() => {
             <div>
               <label class="text-xs font-medium text-gray-500">运行标签</label>
               <input v-model="runTag" type="text" class="input mt-2" placeholder="例如：med-v2-baseline" />
+            </div>
+            <div>
+              <label class="text-xs font-medium text-gray-500">RAGAS采样条数</label>
+              <input
+                v-model="ragasLimit"
+                type="number"
+                min="0"
+                class="input mt-2"
+                placeholder="0表示全量评测"
+              />
+              <div class="text-[11px] text-gray-400 mt-2">
+                0 为全量；默认 10 条可显著缩短评测时长
+              </div>
             </div>
             <div>
               <label class="text-xs font-medium text-gray-500">缓存命名空间</label>
@@ -816,6 +912,126 @@ onUnmounted(() => {
             <div>工作区：{{ historyDetail.workspace || '--' }}</div>
             <div v-if="historyDetail.collection_id">知识库：{{ historyDetail.collection_id }}</div>
             <div>用时：{{ getHistoryElapsed(historyDetail) }} ms</div>
+          </div>
+
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+            <div
+              v-for="metric in metricDefinitions"
+              :key="`history-${metric.key}`"
+              class="rounded-xl border border-gray-100 bg-slate-50 p-3"
+            >
+              <div class="text-gray-500">{{ metric.label }}</div>
+              <div class="mt-2 text-base font-semibold text-gray-900">
+                {{ formatScore(historyDetailSummary?.[metric.key]) }}
+              </div>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
+            <div class="rounded-xl border border-gray-100 bg-slate-50 p-3">
+              <div class="text-gray-500">拒答率</div>
+              <div class="mt-2 text-base font-semibold text-gray-900">
+                {{ formatPercent(historyDetailStability?.abstained_answer_rate) }}
+              </div>
+            </div>
+            <div class="rounded-xl border border-gray-100 bg-slate-50 p-3">
+              <div class="text-gray-500">错误数</div>
+              <div class="mt-2 text-base font-semibold text-gray-900">
+                {{ historyItemsStats?.error_count ?? '--' }}
+              </div>
+            </div>
+            <div class="rounded-xl border border-gray-100 bg-slate-50 p-3">
+              <div class="text-gray-500">平均延迟</div>
+              <div class="mt-2 text-base font-semibold text-gray-900">
+                {{ formatNumber(historyItemsStats?.avg_latency_ms) }} ms
+              </div>
+            </div>
+            <div class="rounded-xl border border-gray-100 bg-slate-50 p-3">
+              <div class="text-gray-500">平均上下文条数</div>
+              <div class="mt-2 text-base font-semibold text-gray-900">
+                {{ formatNumber(historyItemsStats?.avg_contexts_count) }}
+              </div>
+            </div>
+          </div>
+
+          <div class="space-y-3">
+            <div class="flex items-center justify-between">
+              <div class="text-sm font-semibold text-gray-900">历史样本明细</div>
+              <div class="text-xs text-gray-500">
+                共 {{ historyItemsTotal }} 条 · 第 {{ historyItemsPage }} / {{ historyItemsTotalPages }} 页
+              </div>
+            </div>
+            <div v-if="historyItemsLoading" class="text-sm text-gray-500">样本加载中...</div>
+            <div v-else-if="!historyItemsAvailable" class="text-sm text-gray-500">该历史记录没有样本详情</div>
+            <div v-else class="space-y-3">
+              <div
+                v-for="(item, index) in historyItems"
+                :key="`${historyItemsPage}-${index}`"
+                class="border border-gray-200 rounded-xl p-4 bg-white space-y-3"
+              >
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <div class="text-xs text-gray-400">问题</div>
+                    <div class="text-sm text-gray-900">{{ item.question }}</div>
+                  </div>
+                  <div class="text-xs text-gray-500 shrink-0">
+                    上下文 {{ item.contexts_count || 0 }} · 延迟 {{ item.latency_ms ?? '--' }} ms
+                  </div>
+                </div>
+                <div class="grid gap-3">
+                  <div>
+                    <div class="text-xs text-gray-400">参考答案</div>
+                    <div class="text-sm text-gray-700 whitespace-pre-wrap">{{ item.reference }}</div>
+                  </div>
+                  <div>
+                    <div class="text-xs text-gray-400">模型回答</div>
+                    <div class="text-sm text-gray-700 whitespace-pre-wrap">{{ item.answer }}</div>
+                  </div>
+                </div>
+                <div class="flex flex-wrap gap-2 text-xs">
+                  <span
+                    v-for="metric in metricDefinitions"
+                    :key="metric.key"
+                    class="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600"
+                  >
+                    {{ metric.label }} {{ formatScore(getItemMetricValue(item, metric.key)) }}
+                  </span>
+                </div>
+                <details class="bg-gray-50 rounded-lg p-3 text-xs text-gray-600">
+                  <summary class="cursor-pointer text-gray-500">查看上下文预览</summary>
+                  <div class="mt-2 space-y-2">
+                    <div
+                      v-for="(ctx, ctxIndex) in item.contexts_preview || []"
+                      :key="ctxIndex"
+                      class="p-2 rounded bg-white border border-gray-200"
+                    >
+                      {{ ctx }}
+                    </div>
+                    <div v-if="!item.contexts_preview || item.contexts_preview.length === 0">
+                      未返回上下文
+                    </div>
+                  </div>
+                </details>
+              </div>
+            </div>
+            <div v-if="historyItemsAvailable" class="flex items-center justify-end gap-2">
+              <BaseButton
+                size="sm"
+                variant="secondary"
+                :disabled="historyItemsPage <= 1 || historyItemsLoading"
+                @click="changeHistoryItemsPage(historyItemsPage - 1)"
+              >
+                上一页
+              </BaseButton>
+              <BaseButton
+                size="sm"
+                variant="secondary"
+                :disabled="historyItemsPage >= historyItemsTotalPages || historyItemsLoading"
+                @click="changeHistoryItemsPage(historyItemsPage + 1)"
+              >
+                下一页
+              </BaseButton>
+            </div>
           </div>
         </div>
       </BaseCard>

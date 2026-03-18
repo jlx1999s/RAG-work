@@ -9,7 +9,7 @@ export async function startRagEvaluationAsync(payload) {
 }
 
 export async function getRagEvaluationStatus(taskId) {
-  return httpClient.get(`/rag/evaluate-status/${taskId}`)
+  return httpClient.get(`/rag/evaluate-status/${encodeURIComponent(taskId)}`)
 }
 
 export async function listEvalDatasets() {
@@ -17,7 +17,7 @@ export async function listEvalDatasets() {
 }
 
 export async function getEvalDatasetContent(datasetName) {
-  return httpClient.get(`/rag/eval-datasets/${datasetName}`)
+  return httpClient.get(`/rag/eval-datasets/${encodeURIComponent(datasetName)}`)
 }
 
 export async function saveEvalDataset(payload) {
@@ -30,6 +30,14 @@ export async function listEvalHistory(params = {}) {
   return httpClient.get(`/rag/eval-history${suffix}`)
 }
 
-export async function getEvalHistory(historyId) {
-  return httpClient.get(`/rag/eval-history/${historyId}`)
+export async function getEvalHistory(historyId, params = {}) {
+  const query = new URLSearchParams(params).toString()
+  const suffix = query ? `?${query}` : ''
+  return httpClient.get(`/rag/eval-history/${encodeURIComponent(historyId)}${suffix}`)
+}
+
+export async function getEvalHistoryItems(historyId, params = {}) {
+  const query = new URLSearchParams(params).toString()
+  const suffix = query ? `?${query}` : ''
+  return httpClient.get(`/rag/eval-history/${encodeURIComponent(historyId)}/items${suffix}`)
 }
