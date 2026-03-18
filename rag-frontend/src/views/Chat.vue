@@ -245,6 +245,24 @@
                     </div>
                   </div>
                 </div>
+                <div
+                  v-if="getRetrievalMetrics(message).length > 0"
+                  class="retrieval-metrics-grid"
+                >
+                  <div
+                    v-for="(metric, metricIndex) in getRetrievalMetrics(message)"
+                    :key="`${message.id}-metric-${metricIndex}`"
+                    class="retrieval-metric-card"
+                  >
+                    <div class="retrieval-metric-label">{{ metric.label }}</div>
+                    <div
+                      class="retrieval-metric-value"
+                      :class="getRetrievalMetricToneClass(metric.tone)"
+                    >
+                      {{ metric.value }}
+                    </div>
+                  </div>
+                </div>
               </div>
             </details>
           </div>
@@ -1546,6 +1564,147 @@ const getTraceBlocks = (traceData) => {
   return blocks;
 };
 
+const formatMetricValue = (value, options = {}) => {
+  const { suffix = "", digits = 2, fallback = "--" } = options;
+  if (value === null || value === undefined || value === "") {
+    return fallback;
+  }
+  const numberValue = Number(value);
+  if (Number.isFinite(numberValue)) {
+    const fixed = Number.isInteger(numberValue) ? String(numberValue) : numberValue.toFixed(digits);
+    return `${fixed}${suffix}`;
+  }
+  return String(value);
+};
+
+const formatMetricBoolean = (value, trueText = "是", falseText = "否", fallback = "--") => {
+  if (value === null || value === undefined || value === "") {
+    return fallback;
+  }
+  return value ? trueText : falseText;
+};
+
+const getRetrievalMetricToneClass = (tone) => {
+  if (tone === "success") {
+    return "retrieval-metric-value--success";
+  }
+  if (tone === "warning") {
+    return "retrieval-metric-value--warning";
+  }
+  if (tone === "danger") {
+    return "retrieval-metric-value--danger";
+  }
+  return "retrieval-metric-value--neutral";
+};
+
+const getRetrievalMetrics = (message) => {
+  const traceData = message?.trace_data || {};
+  const output = traceData?.output || {};
+  const nodeName = message?.node_name || traceData?.node_name;
+  if (!nodeName) {
+    return [];
+  }
+  if (nodeName === "vector_db_retrieval") {
+    const stats = output?.stats || {};
+    return [
+      {
+        label: "缓存命中",
+        value: formatMetricBoolean(stats.cache_hit, "命中", "未命中"),
+        tone: stats.cache_hit ? "success" : "warning",
+      },
+      {
+        label: "耗时",
+        value: formatMetricValue(stats.duration_ms, { suffix: " ms" }),
+        tone: "neutral",
+      },
+      {
+        label: "召回数量",
+        value: formatMetricValue(stats.retrieved_count, { digits: 0 }),
+        tone: "neutral",
+      },
+      {
+        label: "候选数量",
+        value: formatMetricValue(stats.vector_candidate_count, { digits: 0 }),
+        tone: "neutral",
+      },
+      {
+        label: "向量置信度",
+        value: formatMetricValue(stats.vector_confidence, { digits: 3 }),
+        tone: "neutral",
+      },
+    ];
+  }
+  if (nodeName === "graph_db_retrieval") {
+    const stats = output?.stats || {};
+    const timedOut = Boolean(stats.timed_out);
+    return [
+      {
+        label: "缓存命中",
+        value: formatMetricBoolean(stats.cache_hit, "命中", "未命中"),
+        tone: stats.cache_hit ? "success" : "warning",
+      },
+      {
+        label: "是否超时",
+        value: formatMetricBoolean(stats.timed_out, "是", "否"),
+        tone: timedOut ? "danger" : "success",
+      },
+      {
+        label: "耗时",
+        value: formatMetricValue(stats.duration_ms, { suffix: " ms" }),
+        tone: "neutral",
+      },
+      {
+        label: "预算文档数",
+        value: formatMetricValue(stats.budget_docs, { digits: 0 }),
+        tone: "neutral",
+      },
+      {
+        label: "召回数量",
+        value: formatMetricValue(stats.retrieved_count, { digits: 0 }),
+        tone: "neutral",
+      },
+    ];
+  }
+  if (nodeName === "hybrid_retrieval") {
+    const fusionStats = output?.fusion_stats || {};
+    const vectorStats = output?.vector_stats || {};
+    const graphStats = output?.graph_stats || {};
+    return [
+      {
+        label: "图检索跳过",
+        value: formatMetricBoolean(fusionStats.graph_skipped, "是", "否"),
+        tone: fusionStats.graph_skipped ? "warning" : "success",
+      },
+      {
+        label: "图检索熔断",
+        value: formatMetricBoolean(fusionStats.graph_circuit_open, "开启", "关闭"),
+        tone: fusionStats.graph_circuit_open ? "danger" : "success",
+      },
+      {
+        label: "图预算文档数",
+        value: formatMetricValue(fusionStats.graph_budget_docs, { digits: 0 }),
+        tone: "neutral",
+      },
+      {
+        label: "向量缓存",
+        value: formatMetricBoolean(vectorStats.cache_hit, "命中", "未命中"),
+        tone: vectorStats.cache_hit ? "success" : "warning",
+      },
+      {
+        label: "图缓存",
+        value: formatMetricBoolean(graphStats.cache_hit, "命中", "未命中"),
+        tone: graphStats.cache_hit ? "success" : "warning",
+      },
+      {
+        label: "融合文档数",
+        value: formatMetricValue(fusionStats.merged_docs, { digits: 0 }),
+        tone: "neutral",
+      },
+    ];
+  }
+  return [];
+};
+
 // 获取节点显示名称
 const getNodeDisplayName = (nodeName) => {
   const nodeNameMap = {
@@ -2047,6 +2206,47 @@ const restorePanelWidth = () => {
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.5;
+}
+
+.retrieval-metrics-grid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.retrieval-metric-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 8px 10px;
+}
+
+.retrieval-metric-label {
+  font-size: 11px;
+  color: #6b7280;
+  margin-bottom: 2px;
+}
+
+.retrieval-metric-value {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.retrieval-metric-value--success {
+  color: #065f46;
+}
+
+.retrieval-metric-value--warning {
+  color: #92400e;
+}
+
+.retrieval-metric-value--danger {
+  color: #b91c1c;
+}
+
+.retrieval-metric-value--neutral {
+  color: #1f2937;
 }
 
 .trace-call-list {
