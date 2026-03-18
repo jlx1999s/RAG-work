@@ -1025,6 +1025,137 @@ flowchart TD
                 placeholder="你是一个专业的RAG助手，能够基于检索到的信息提供准确的回答。"
               ></textarea>
             </div>
+
+            <div class="mt-6 rounded-lg border border-gray-200 p-4 bg-gray-50/40">
+              <div class="flex items-center justify-between">
+                <div>
+                  <div class="text-sm text-gray-800">
+                    记忆治理
+                  </div>
+                  <div class="text-xs text-gray-500 mt-1">
+                    collection_id: {{ resolveMemoryCollectionId() }}
+                  </div>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button
+                    @click="loadUserMemorySnapshot"
+                    :disabled="memoryLoading || memoryActionLoading"
+                    class="px-3 py-1.5 text-xs rounded-md border border-gray-200 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                  >
+                    刷新
+                  </button>
+                  <button
+                    @click="clearAllMemoryForCollection"
+                    :disabled="memoryLoading || memoryActionLoading"
+                    class="px-3 py-1.5 text-xs rounded-md border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-50"
+                  >
+                    清空全部
+                  </button>
+                  <button
+                    @click="openMemoryDrawer"
+                    :disabled="memoryLoading || memoryActionLoading"
+                    class="px-3 py-1.5 text-xs rounded-md border border-gray-900 bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50"
+                  >
+                    高级治理
+                  </button>
+                </div>
+              </div>
+
+              <div v-if="memoryLoading" class="text-xs text-gray-500 mt-3">正在加载记忆...</div>
+
+              <div v-else class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="rounded-md border border-gray-200 bg-white p-3">
+                  <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs text-gray-500">短期记忆（会话内）</span>
+                    <span class="text-xs text-gray-400">{{ memoryShortTermMessages.length }} 条</span>
+                  </div>
+                  <div v-if="!memoryConversationId" class="text-xs text-gray-400">
+                    {{ conversationMemoryUnavailableReason }}
+                    <div class="mt-1 text-[11px] text-gray-300">会话内记忆依赖 conversation_id，不是 collection_id</div>
+                  </div>
+                  <div v-else-if="memoryShortTermMessages.length === 0" class="text-xs text-gray-400">暂无短期记忆</div>
+                  <div v-else class="space-y-1">
+                    <div
+                      v-for="(item, index) in memoryShortTermMessages.slice(-2)"
+                      :key="`${item.role}-${index}`"
+                      class="text-[11px] text-gray-700"
+                    >
+                      <span class="text-gray-400 mr-1">{{ item.role }}</span>
+                      <span class="line-clamp-2 break-all">{{ item.content }}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="rounded-md border border-gray-200 bg-white p-3">
+                  <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs text-gray-500">长期记忆（会话摘要）</span>
+                    <span class="text-xs text-gray-400">{{ memoryConversationSummary ? 1 : 0 }} 条</span>
+                  </div>
+                  <div v-if="!memoryConversationId" class="text-xs text-gray-400">
+                    {{ conversationMemoryUnavailableReason }}
+                    <div class="mt-1 text-[11px] text-gray-300">会话摘要依赖 conversation_id，不是 collection_id</div>
+                  </div>
+                  <div v-else-if="!memoryConversationSummary" class="text-xs text-gray-400">暂无摘要</div>
+                  <div v-else class="text-xs text-gray-600 break-all line-clamp-4">{{ memoryConversationSummary }}</div>
+                </div>
+
+                <div class="rounded-md border border-gray-200 bg-white p-3">
+                  <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs text-gray-500">画像记忆</span>
+                    <span class="text-xs text-gray-400">{{ memoryProfiles.length }} 条</span>
+                  </div>
+                  <div v-if="memoryProfiles.length === 0" class="text-xs text-gray-400">暂无画像记忆</div>
+                  <div v-else class="space-y-2 max-h-48 overflow-y-auto pr-1">
+                    <div
+                      v-for="profile in memoryProfiles"
+                      :key="profile.memory_key"
+                      class="rounded border border-gray-100 bg-gray-50 px-2 py-2"
+                    >
+                      <div class="flex items-center justify-between gap-2">
+                        <div class="text-xs font-medium text-gray-800 truncate">{{ profile.memory_key }}</div>
+                        <button
+                          @click="removeProfileMemory(profile.memory_key)"
+                          :disabled="memoryActionLoading"
+                          class="text-xs text-red-500 hover:text-red-700 disabled:opacity-50"
+                        >
+                          删除
+                        </button>
+                      </div>
+                      <div class="text-xs text-gray-600 mt-1 break-all">{{ formatProfileMemoryValue(profile.memory_value) }}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="rounded-md border border-gray-200 bg-white p-3">
+                  <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs text-gray-500">事件记忆</span>
+                    <span class="text-xs text-gray-400">{{ memoryEvents.length }} 条</span>
+                  </div>
+                  <div v-if="memoryEvents.length === 0" class="text-xs text-gray-400">暂无事件记忆</div>
+                  <div v-else class="space-y-2 max-h-48 overflow-y-auto pr-1">
+                    <div
+                      v-for="event in memoryEvents"
+                      :key="event.id"
+                      class="rounded border border-gray-100 bg-gray-50 px-2 py-2"
+                    >
+                      <div class="flex items-center justify-between gap-2">
+                        <div class="text-xs text-gray-700">
+                          {{ event.role }} · {{ event.conversation_id }}
+                        </div>
+                        <button
+                          @click="removeConversationMemory(event.conversation_id)"
+                          :disabled="memoryActionLoading"
+                          class="text-xs text-red-500 hover:text-red-700 disabled:opacity-50"
+                        >
+                          删除会话
+                        </button>
+                      </div>
+                      <div class="text-xs text-gray-600 mt-1 line-clamp-3">{{ event.content }}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1055,6 +1186,345 @@ flowchart TD
         </div>
       </div>
     </div>
+
+    <div
+      v-if="memoryDrawerOpen"
+      class="fixed inset-0 z-[80] bg-black/35 backdrop-blur-[1px]"
+      @click="closeMemoryDrawer"
+    >
+      <div
+        class="absolute right-0 top-0 h-full w-full max-w-2xl bg-white shadow-2xl border-l border-gray-200 flex flex-col"
+        @click.stop
+      >
+        <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+          <div>
+            <h3 class="text-base text-gray-900">记忆治理中心</h3>
+            <p class="text-xs text-gray-500 mt-1">collection_id: {{ resolveMemoryCollectionId() }}</p>
+          </div>
+          <button
+            @click="closeMemoryDrawer"
+            class="text-gray-400 hover:text-gray-700 p-1 rounded-md hover:bg-gray-100"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="px-6 py-4 border-b border-gray-100">
+          <div class="flex items-center gap-2">
+            <input
+              v-model.trim="memoryKeyword"
+              type="text"
+              placeholder="按 key / value / conversation_id / content 过滤"
+              class="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900"
+            />
+            <button
+              @click="loadUserMemorySnapshot"
+              :disabled="memoryLoading || memoryActionLoading"
+              class="px-3 py-2 text-xs rounded-md border border-gray-200 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+            >
+              刷新
+            </button>
+          </div>
+          <div class="mt-2 flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+              <span class="text-[11px] text-gray-500">并发删除</span>
+              <button
+                v-for="option in memoryActionConcurrencyOptions"
+                :key="option"
+                @click="memoryActionConcurrency = option"
+                :disabled="memoryActionLoading"
+                class="px-2 py-0.5 text-[11px] rounded-md border disabled:opacity-50"
+                :class="
+                  memoryActionConcurrency === option
+                    ? 'border-gray-900 bg-gray-900 text-white'
+                    : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-100'
+                "
+              >
+                {{ option }}
+              </button>
+              <button
+                v-if="memoryProgress.running"
+                @click="cancelMemoryBatch"
+                class="px-2 py-0.5 text-[11px] rounded-md border border-red-200 bg-red-50 text-red-600 hover:bg-red-100"
+              >
+                取消任务
+              </button>
+            </div>
+            <div class="text-[11px] text-gray-500" v-if="memoryProgress.running">
+              {{ memoryProgress.label }}：{{ memoryProgress.processed }}/{{ memoryProgress.total }}
+            </div>
+          </div>
+          <div v-if="memoryProgress.total" class="mt-2 rounded-md border border-gray-200 bg-white px-2 py-2">
+            <div class="flex items-center justify-between text-[11px] text-gray-600">
+              <span>{{ memoryProgress.label || "批量操作" }}</span>
+              <span>{{ memoryProgress.processed }}/{{ memoryProgress.total }}</span>
+            </div>
+            <div class="mt-1 h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
+              <div
+                class="h-full bg-gray-900 transition-all duration-200"
+                :class="memoryProgress.running ? 'opacity-90' : 'opacity-75'"
+                :style="{ width: `${memoryProgressPercent}%` }"
+              ></div>
+            </div>
+            <div class="mt-1 text-[11px] text-gray-500">
+              成功 {{ memoryProgress.success }} · 失败 {{ memoryProgress.failed }}
+            </div>
+          </div>
+          <div
+            v-if="memoryOperationReport"
+            class="mt-3 rounded-lg border px-3 py-2"
+            :class="memoryOperationReport.failed.length ? 'border-amber-200 bg-amber-50' : 'border-emerald-200 bg-emerald-50'"
+          >
+            <div class="text-xs text-gray-700">
+              {{ memoryOperationReport.label }}：共 {{ memoryOperationReport.total }}，成功 {{ memoryOperationReport.success }}，失败
+              {{ memoryOperationReport.failed.length }}
+            </div>
+            <div class="text-[11px] text-gray-500 mt-1">{{ formatMemoryTimestamp(memoryOperationReport.timestamp) }}</div>
+            <div v-if="memoryOperationReport.failed.length" class="mt-1 text-[11px] text-amber-700 break-all">
+              失败项：{{ memoryOperationReport.failed.join("、") }}
+            </div>
+            <button
+              v-if="memoryOperationReport.failed.length"
+              @click="retryFailedMemoryOperation"
+              :disabled="memoryActionLoading"
+              class="mt-2 px-2.5 py-1 text-[11px] rounded-md border border-amber-300 bg-white text-amber-700 hover:bg-amber-100 disabled:opacity-50"
+            >
+              重试失败项（{{ memoryOperationReport.failed.length }}）
+            </button>
+            <button
+              v-if="memoryOperationReport.failed.length"
+              @click="copyFailedItems"
+              class="mt-2 ml-2 px-2.5 py-1 text-[11px] rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-100"
+            >
+              复制失败项
+            </button>
+          </div>
+        </div>
+
+        <div v-if="memoryLoading" class="flex-1 flex items-center justify-center text-sm text-gray-500">
+          正在加载记忆...
+        </div>
+
+        <div v-else class="flex-1 overflow-hidden flex flex-col">
+          <div class="px-6 py-4 border-b border-gray-100 bg-gradient-to-b from-gray-50/70 to-white">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="text-xs text-gray-500 tracking-wide">Memory Map</div>
+                <div class="text-sm text-gray-900 mt-1">看清会话内与跨会话的记忆层</div>
+                <div class="text-[11px] text-gray-500 mt-1">
+                  会话ID(conversation_id)：{{ memoryConversationId || "未提供（临时会话/未保存）" }}（{{ currentConversationStatusLabel }}）
+                </div>
+              </div>
+              <div class="text-[11px] text-gray-500 text-right">
+                <div>短期（会话内）：{{ memoryShortTermMessages.length }} 条</div>
+                <div>摘要（会话内）：{{ memoryConversationSummary ? "有" : "无" }}</div>
+                <div>事件（跨会话）：{{ memoryEvents.length }} 条 / {{ memoryEventConversationCount }} 个会话</div>
+                <div>画像（跨会话）：{{ memoryProfiles.length }} 条</div>
+              </div>
+            </div>
+
+            <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div class="rounded-xl border border-gray-200 bg-white/90 shadow-sm p-3">
+                <div class="flex items-center justify-between">
+                  <div class="text-xs text-gray-500">短期记忆（会话内最近对话）</div>
+                  <div class="text-xs text-gray-400">{{ memoryShortTermMessages.length }}</div>
+                </div>
+                <div v-if="!memoryConversationId" class="text-xs text-gray-400 mt-2">
+                  {{ conversationMemoryUnavailableReason }}
+                  <div class="mt-1 text-[11px] text-gray-300">会话内记忆依赖 conversation_id，不是 collection_id</div>
+                  <div v-if="groupedFilteredMemoryEvents.length" class="mt-2">
+                    <div class="text-[11px] text-gray-300">从事件记忆挑一个会话ID验证：</div>
+                    <div class="mt-1 flex flex-wrap gap-1">
+                      <button
+                        v-for="group in groupedFilteredMemoryEvents.slice(0, 3)"
+                        :key="group.conversation_id"
+                        @click="useConversationIdForMemory(group.conversation_id)"
+                        class="px-2 py-0.5 text-[11px] rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+                      >
+                        {{ group.conversation_id }}
+                      </button>
+                      <button
+                        v-if="memoryConversationIdOverride"
+                        @click="clearMemoryConversationIdOverride"
+                        class="px-2 py-0.5 text-[11px] rounded-md border border-gray-200 bg-white text-gray-500 hover:bg-gray-50"
+                      >
+                        清除
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div v-else-if="memoryShortTermMessages.length === 0" class="text-xs text-gray-400 mt-2">
+                  暂无短期记忆
+                </div>
+                <div v-else class="mt-2 space-y-1">
+                  <div
+                    v-for="(item, index) in memoryShortTermMessages.slice(-3)"
+                    :key="`${item.role}-${index}`"
+                    class="text-[11px] text-gray-700"
+                  >
+                    <span class="text-gray-400 mr-1">{{ item.role }}</span>
+                    <span class="line-clamp-2 break-all">{{ item.content }}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="rounded-xl border border-gray-200 bg-white/90 shadow-sm p-3">
+                <div class="flex items-center justify-between">
+                  <div class="text-xs text-gray-500">长期记忆（会话内摘要）</div>
+                  <div class="text-xs text-gray-400">{{ memoryConversationSummary ? 1 : 0 }}</div>
+                </div>
+                <div v-if="!memoryConversationId" class="text-xs text-gray-400 mt-2">
+                  {{ conversationMemoryUnavailableReason }}
+                  <div class="mt-1 text-[11px] text-gray-300">会话摘要依赖 conversation_id，不是 collection_id</div>
+                </div>
+                <div v-else-if="!memoryConversationSummary" class="text-xs text-gray-400 mt-2">
+                  暂无摘要
+                </div>
+                <div v-else class="mt-2 text-[11px] text-gray-700 break-all line-clamp-6">
+                  {{ memoryConversationSummary }}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex-1 overflow-hidden grid grid-cols-1 md:grid-cols-2 gap-0">
+          <div class="h-full border-r border-gray-100 flex flex-col">
+            <div class="px-4 py-3 border-b border-gray-100">
+              <div class="flex items-center justify-between gap-2">
+                <div class="text-xs text-gray-500">画像记忆（筛选后 {{ filteredMemoryProfiles.length }}）</div>
+                <select
+                  v-model="profileSortMode"
+                  class="text-[11px] px-2 py-1 border border-gray-200 rounded-md bg-white text-gray-600"
+                >
+                  <option value="latest_desc">最近更新</option>
+                  <option value="latest_asc">最早更新</option>
+                  <option value="key_asc">按Key排序</option>
+                </select>
+              </div>
+              <div class="mt-2 flex items-center gap-2">
+                <button
+                  @click="selectAllFilteredProfiles"
+                  class="text-xs text-gray-600 hover:text-gray-900"
+                  :disabled="filteredMemoryProfiles.length === 0"
+                >
+                  全选
+                </button>
+                <button
+                  @click="clearProfileSelection"
+                  class="text-xs text-gray-600 hover:text-gray-900"
+                  :disabled="selectedProfileKeys.length === 0"
+                >
+                  清空
+                </button>
+              </div>
+            </div>
+            <div class="flex-1 overflow-y-auto p-3 space-y-2">
+              <div v-if="filteredMemoryProfiles.length === 0" class="text-xs text-gray-400">无匹配画像记忆</div>
+              <label
+                v-for="profile in filteredMemoryProfiles"
+                :key="profile.memory_key"
+                class="block rounded-md border border-gray-100 bg-gray-50 p-2 cursor-pointer"
+              >
+                <div class="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    :checked="selectedProfileKeys.includes(profile.memory_key)"
+                    @change="toggleProfileSelection(profile.memory_key)"
+                    class="mt-0.5"
+                  />
+                  <div class="min-w-0 flex-1">
+                    <div class="text-xs font-medium text-gray-800 truncate">{{ profile.memory_key }}</div>
+                    <div class="text-xs text-gray-600 mt-1 break-all">{{ formatProfileMemoryValue(profile.memory_value) }}</div>
+                    <div class="text-[11px] text-gray-400 mt-1">
+                      {{ formatMemoryTimestamp(profile.updated_at || profile.created_at) }}
+                    </div>
+                  </div>
+                </div>
+              </label>
+            </div>
+            <div class="px-4 py-3 border-t border-gray-100">
+              <button
+                @click="removeSelectedProfileMemories"
+                :disabled="selectedProfileKeys.length === 0 || memoryActionLoading"
+                class="w-full px-3 py-2 text-xs rounded-md border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-50"
+              >
+                批量删除画像（{{ selectedProfileKeys.length }}）
+              </button>
+            </div>
+          </div>
+
+          <div class="h-full flex flex-col">
+            <div class="px-4 py-3 border-b border-gray-100">
+              <div class="flex items-center justify-between gap-2">
+                <div class="text-xs text-gray-500">会话事件组（筛选后 {{ groupedFilteredMemoryEvents.length }}）</div>
+                <select
+                  v-model="eventSortMode"
+                  class="text-[11px] px-2 py-1 border border-gray-200 rounded-md bg-white text-gray-600"
+                >
+                  <option value="latest_desc">最近活跃</option>
+                  <option value="latest_asc">最早活跃</option>
+                  <option value="count_desc">按数量降序</option>
+                </select>
+              </div>
+              <div class="mt-2 flex items-center gap-2">
+                <button
+                  @click="selectAllFilteredConversations"
+                  class="text-xs text-gray-600 hover:text-gray-900"
+                  :disabled="groupedFilteredMemoryEvents.length === 0"
+                >
+                  全选
+                </button>
+                <button
+                  @click="clearConversationSelection"
+                  class="text-xs text-gray-600 hover:text-gray-900"
+                  :disabled="selectedConversationIds.length === 0"
+                >
+                  清空
+                </button>
+              </div>
+            </div>
+            <div class="flex-1 overflow-y-auto p-3 space-y-2">
+              <div v-if="groupedFilteredMemoryEvents.length === 0" class="text-xs text-gray-400">无匹配事件记忆</div>
+              <label
+                v-for="group in groupedFilteredMemoryEvents"
+                :key="group.conversation_id"
+                class="block rounded-md border border-gray-100 bg-gray-50 p-2 cursor-pointer"
+              >
+                <div class="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    :checked="selectedConversationIds.includes(group.conversation_id)"
+                    @change="toggleConversationSelection(group.conversation_id)"
+                    class="mt-0.5"
+                  />
+                  <div class="min-w-0 flex-1">
+                    <div class="text-xs text-gray-800 truncate">
+                      {{ group.conversation_id }} · {{ group.count }} 条
+                    </div>
+                    <div class="text-xs text-gray-500 mt-1 line-clamp-2">{{ group.preview }}</div>
+                    <div class="text-[11px] text-gray-400 mt-1">
+                      {{ formatMemoryTimestamp(group.latest_ts) }}
+                    </div>
+                  </div>
+                </div>
+              </label>
+            </div>
+            <div class="px-4 py-3 border-t border-gray-100">
+              <button
+                @click="removeSelectedConversationMemories"
+                :disabled="selectedConversationIds.length === 0 || memoryActionLoading"
+                class="w-full px-3 py-2 text-xs rounded-md border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-50"
+              >
+                批量删除会话事件（{{ selectedConversationIds.length }}）
+              </button>
+            </div>
+          </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -1065,6 +1535,12 @@ import { ElMessageBox, ElMessage } from "element-plus";
 import { useAuthStore } from "../stores/auth";
 import { useChatStore } from "../stores/chat";
 import { knowledgeAPI } from "../api/knowledge.js";
+import {
+  getUserMemory,
+  deleteUserMemoryProfile,
+  deleteConversationMemory,
+  deleteAllUserMemory,
+} from "../api/chat.js";
 import MarkdownIt from "markdown-it";
 import BaseModal from "@/components/BaseModal.vue";
 import BaseButton from "@/components/BaseButton.vue";
@@ -1104,6 +1580,39 @@ const selectedLibraryForDialog = ref(""); // 弹窗中选择的知识库
 const dontShowLibrarySelectAgain = ref(false); // 不再显示提示
 const pendingConversationId = ref(null); // 待切换的对话ID（用于设置确认后切换）
 const isSettingsForConversationSwitch = ref(false); // 标记设置对话框是否为切换对话触发
+const memoryLoading = ref(false);
+const memoryActionLoading = ref(false);
+const memoryProfiles = ref([]);
+const memoryEvents = ref([]);
+const memoryShortTermMessages = ref([]);
+const memoryConversationSummary = ref("");
+const memoryConversationId = ref("");
+const memoryConversationIdOverride = ref("");
+const memoryDrawerOpen = ref(false);
+const memoryKeyword = ref("");
+const selectedProfileKeys = ref([]);
+const selectedConversationIds = ref([]);
+const profileSortMode = ref("latest_desc");
+const eventSortMode = ref("latest_desc");
+const ragModeStorageKey = "ragMode";
+const selectedLibraryStorageKey = "selectedLibrary";
+const maxRetrievalDocsStorageKey = "maxRetrievalDocs";
+const systemPromptStorageKey = "systemPrompt";
+const memoryOperationReport = ref(null);
+const memoryActionConcurrency = ref(5);
+const memoryActionConcurrencyOptions = [3, 5, 10];
+const memoryProgress = ref({
+  label: "",
+  total: 0,
+  processed: 0,
+  success: 0,
+  failed: 0,
+  running: false,
+});
+const memoryBatchController = ref({
+  runId: 0,
+  cancelled: false,
+});
 
 // Agent面板调整大小相关
 const agentPanelWidth = ref(384); // 初始宽度 384px (w-96)
@@ -1148,6 +1657,41 @@ const currentConversation = computed(() => chatStore.currentConversation);
 const messages = computed(() => chatStore.messages);
 const streaming = computed(() => chatStore.streaming);
 const loading = computed(() => chatStore.loading);
+const currentConversationStatus = computed(() => {
+  const conversation = currentConversation.value;
+  if (!conversation) {
+    return "none";
+  }
+  const id = String(conversation.id || "");
+  if (id && !id.startsWith("temp_")) {
+    return "active";
+  }
+  if (conversation.persistenceStatus) {
+    return conversation.persistenceStatus;
+  }
+  return "draft";
+});
+const currentConversationStatusLabel = computed(() => {
+  if (currentConversationStatus.value === "active") {
+    return "已落库";
+  }
+  if (currentConversationStatus.value === "failed") {
+    return "落库失败";
+  }
+  if (currentConversationStatus.value === "none") {
+    return "未选择";
+  }
+  return "草稿";
+});
+const conversationMemoryUnavailableReason = computed(() => {
+  if (currentConversationStatus.value === "none") {
+    return "当前未选择会话，无法展示会话内短期记忆和会话摘要";
+  }
+  if (currentConversationStatus.value === "failed") {
+    return "当前会话创建失败（未落库），无法展示会话内短期记忆和会话摘要";
+  }
+  return "当前会话未保存，无法展示会话内短期记忆和会话摘要";
+});
 const traceCalls = computed(() => {
   const calls = [];
   let currentCall = null;
@@ -1181,6 +1725,130 @@ const traceTimeline = computed(() => {
     ...message,
     step_index: message.step_index || index + 1,
   }));
+});
+const memoryKeywordLower = computed(() => memoryKeyword.value.toLowerCase());
+const memoryEventConversationCount = computed(() => {
+  const ids = new Set();
+  for (const event of memoryEvents.value || []) {
+    const id = String(event?.conversation_id || "");
+    if (id) {
+      ids.add(id);
+    }
+  }
+  return ids.size;
+});
+const parseMemoryTimestamp = (value) => {
+  if (!value) {
+    return 0;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  const ts = Date.parse(value);
+  if (Number.isNaN(ts)) {
+    return 0;
+  }
+  return ts;
+};
+const formatMemoryTimestamp = (value) => {
+  const ts = parseMemoryTimestamp(value);
+  if (!ts) {
+    return "时间未知";
+  }
+  return new Date(ts).toLocaleString();
+};
+const formatProfileMemoryValue = (value) => {
+  const raw = String(value ?? "");
+  const text = raw.trim();
+  if (!text) {
+    return "";
+  }
+  const looksJson =
+    (text.startsWith("[") && text.endsWith("]")) ||
+    (text.startsWith("{") && text.endsWith("}"));
+  if (!looksJson) {
+    return raw;
+  }
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) {
+      return parsed.filter(Boolean).join("、");
+    }
+    if (parsed && typeof parsed === "object") {
+      return Object.entries(parsed)
+        .map(([k, v]) => `${k}:${v}`)
+        .join("，");
+    }
+  } catch (e) {
+    return raw;
+  }
+  return raw;
+};
+const filteredMemoryProfiles = computed(() => {
+  const keyword = memoryKeywordLower.value;
+  const filtered = memoryProfiles.value.filter((profile) => {
+    const key = String(profile.memory_key || "").toLowerCase();
+    const value = String(profile.memory_value || "").toLowerCase();
+    return !keyword || key.includes(keyword) || value.includes(keyword);
+  });
+  return [...filtered].sort((a, b) => {
+    if (profileSortMode.value === "key_asc") {
+      return String(a.memory_key || "").localeCompare(String(b.memory_key || ""));
+    }
+    const tsA = parseMemoryTimestamp(a.updated_at || a.created_at);
+    const tsB = parseMemoryTimestamp(b.updated_at || b.created_at);
+    if (profileSortMode.value === "latest_asc") {
+      return tsA - tsB;
+    }
+    return tsB - tsA;
+  });
+});
+const groupedFilteredMemoryEvents = computed(() => {
+  const keyword = memoryKeywordLower.value;
+  const grouped = {};
+  for (const event of memoryEvents.value) {
+    const conversationId = String(event.conversation_id || "default");
+    const role = String(event.role || "");
+    const content = String(event.content || "");
+    const combined = `${conversationId} ${role} ${content}`.toLowerCase();
+    if (keyword && !combined.includes(keyword)) {
+      continue;
+    }
+    if (!grouped[conversationId]) {
+      grouped[conversationId] = {
+        conversation_id: conversationId,
+        count: 0,
+        preview: "",
+        latest_ts: 0,
+      };
+    }
+    grouped[conversationId].count += 1;
+    if (!grouped[conversationId].preview) {
+      grouped[conversationId].preview = content;
+    }
+    const eventTs = parseMemoryTimestamp(event.created_at || event.updated_at);
+    if (eventTs > grouped[conversationId].latest_ts) {
+      grouped[conversationId].latest_ts = eventTs;
+    }
+  }
+  return Object.values(grouped).sort((a, b) => {
+    if (eventSortMode.value === "count_desc") {
+      return b.count - a.count;
+    }
+    if (eventSortMode.value === "latest_asc") {
+      return a.latest_ts - b.latest_ts;
+    }
+    return b.latest_ts - a.latest_ts;
+  });
+});
+const memoryProgressPercent = computed(() => {
+  if (!memoryProgress.value.total) {
+    return 0;
+  }
+  return Math.min(
+    100,
+    Math.round((memoryProgress.value.processed / memoryProgress.value.total) * 100)
+  );
 });
 
 // 方法
@@ -1361,15 +2029,9 @@ const selectConversation = async (conversationId) => {
   if (currentConversation.value && currentConversation.value.id === conversationId) {
     return;
   }
-
-  // 保存待切换的对话ID
-  pendingConversationId.value = conversationId;
-
-  // 标记这是为了切换对话而打开的设置
-  isSettingsForConversationSwitch.value = true;
-
-  // 打开设置对话框
-  settingsModalOpen.value = true;
+  isSettingsForConversationSwitch.value = false;
+  pendingConversationId.value = null;
+  await chatStore.selectConversation(conversationId);
 };
 
 const deleteConversation = async (conversationId) => {
@@ -1746,6 +2408,23 @@ const loadKnowledgeLibraries = async () => {
   }
 };
 
+const findLibraryByIdentifier = (libraryIdentifier) => {
+  const normalized = String(libraryIdentifier || "").trim();
+  if (!normalized) {
+    return null;
+  }
+  return (
+    knowledgeLibraries.value.find((lib) => String(lib.id) === normalized) ||
+    knowledgeLibraries.value.find((lib) => String(lib.collection_id) === normalized) ||
+    null
+  );
+};
+
+const normalizeSelectedLibraryValue = (libraryIdentifier) => {
+  const library = findLibraryByIdentifier(libraryIdentifier);
+  return library ? String(library.id) : "";
+};
+
 // 获取RAG模式文本（单选）
 const getRagModeText = (mode) => {
   const option = ragOptions.find((opt) => opt.value === mode);
@@ -1754,14 +2433,449 @@ const getRagModeText = (mode) => {
 
 // 获取选中知识库名称
 const getSelectedLibraryName = (libraryId) => {
-  const library = knowledgeLibraries.value.find((lib) => lib.id === libraryId);
+  const library = findLibraryByIdentifier(libraryId);
   return library ? library.title : "未知知识库";
 };
 
 // 获取选中知识库的collection_id
 const getSelectedLibraryCollectionId = (libraryId) => {
-  const library = knowledgeLibraries.value.find((lib) => lib.id === libraryId);
+  const library = findLibraryByIdentifier(libraryId);
   return library ? library.collection_id : null;
+};
+
+const resolveMemoryCollectionId = () => {
+  const selectedCollection = selectedLibrary.value
+    ? getSelectedLibraryCollectionId(selectedLibrary.value)
+    : null;
+  return selectedCollection || "kb12_1760260169325";
+};
+
+const loadUserMemorySnapshot = async () => {
+  const userId = String(authStore.user?.id || "default_user");
+  const collectionId = resolveMemoryCollectionId();
+  const rawConversationId = String(currentConversation.value?.id || "");
+  const currentConversationId = rawConversationId &&
+    !rawConversationId.startsWith("temp_")
+    ? rawConversationId
+    : "";
+  const effectiveConversationId = String(
+    memoryConversationIdOverride.value || currentConversationId
+  ).trim();
+  try {
+    memoryLoading.value = true;
+    const response = await getUserMemory(
+      userId,
+      collectionId,
+      50,
+      50,
+      effectiveConversationId || null,
+      10
+    );
+    if (response?.status === 200 && response?.data) {
+      memoryProfiles.value = response.data.profiles || [];
+      memoryEvents.value = response.data.events || [];
+      memoryShortTermMessages.value = response.data.short_term_messages || [];
+      memoryConversationSummary.value = response.data.conversation_summary || "";
+      memoryConversationId.value = response.data.conversation_id || effectiveConversationId || "";
+      selectedProfileKeys.value = [];
+      selectedConversationIds.value = [];
+      return;
+    }
+    memoryProfiles.value = [];
+    memoryEvents.value = [];
+    memoryShortTermMessages.value = [];
+    memoryConversationSummary.value = "";
+    memoryConversationId.value = "";
+    selectedProfileKeys.value = [];
+    selectedConversationIds.value = [];
+  } catch (error) {
+    memoryProfiles.value = [];
+    memoryEvents.value = [];
+    memoryShortTermMessages.value = [];
+    memoryConversationSummary.value = "";
+    memoryConversationId.value = "";
+    selectedProfileKeys.value = [];
+    selectedConversationIds.value = [];
+    ElMessage.error(error.message || "加载记忆失败");
+  } finally {
+    memoryLoading.value = false;
+  }
+};
+
+const useConversationIdForMemory = async (conversationId) => {
+  memoryConversationIdOverride.value = String(conversationId || "").trim();
+  await loadUserMemorySnapshot();
+};
+
+const clearMemoryConversationIdOverride = async () => {
+  memoryConversationIdOverride.value = "";
+  await loadUserMemorySnapshot();
+};
+
+const removeProfileMemory = async (memoryKey) => {
+  const userId = String(authStore.user?.id || "default_user");
+  const collectionId = resolveMemoryCollectionId();
+  try {
+    await ElMessageBox.confirm(`确定删除画像记忆 ${memoryKey} 吗？`, "删除确认", {
+      type: "warning",
+      confirmButtonText: "删除",
+      cancelButtonText: "取消",
+    });
+    memoryActionLoading.value = true;
+    const response = await deleteUserMemoryProfile(userId, memoryKey, collectionId);
+    if (response?.status === 200) {
+      ElMessage.success("画像记忆已删除");
+      await loadUserMemorySnapshot();
+      return;
+    }
+    ElMessage.error(response?.msg || "删除画像记忆失败");
+  } catch (error) {
+    if (error !== "cancel") {
+      ElMessage.error(error.message || "删除画像记忆失败");
+    }
+  } finally {
+    memoryActionLoading.value = false;
+  }
+};
+
+const removeConversationMemory = async (conversationId) => {
+  const userId = String(authStore.user?.id || "default_user");
+  const collectionId = resolveMemoryCollectionId();
+  try {
+    await ElMessageBox.confirm(`确定删除会话 ${conversationId} 的事件记忆吗？`, "删除确认", {
+      type: "warning",
+      confirmButtonText: "删除",
+      cancelButtonText: "取消",
+    });
+    memoryActionLoading.value = true;
+    const response = await deleteConversationMemory(userId, conversationId, collectionId);
+    if (response?.status === 200) {
+      ElMessage.success("会话事件记忆已删除");
+      await loadUserMemorySnapshot();
+      return;
+    }
+    ElMessage.error(response?.msg || "删除会话记忆失败");
+  } catch (error) {
+    if (error !== "cancel") {
+      ElMessage.error(error.message || "删除会话记忆失败");
+    }
+  } finally {
+    memoryActionLoading.value = false;
+  }
+};
+
+const clearAllMemoryForCollection = async () => {
+  const userId = String(authStore.user?.id || "default_user");
+  const collectionId = resolveMemoryCollectionId();
+  try {
+    await ElMessageBox.confirm("确定清空当前知识库下的全部用户记忆吗？", "清空确认", {
+      type: "warning",
+      confirmButtonText: "清空",
+      cancelButtonText: "取消",
+    });
+    memoryActionLoading.value = true;
+    const response = await deleteAllUserMemory(userId, collectionId);
+    if (response?.status === 200) {
+      ElMessage.success("用户记忆已清空");
+      await loadUserMemorySnapshot();
+      return;
+    }
+    ElMessage.error(response?.msg || "清空记忆失败");
+  } catch (error) {
+    if (error !== "cancel") {
+      ElMessage.error(error.message || "清空记忆失败");
+    }
+  } finally {
+    memoryActionLoading.value = false;
+  }
+};
+
+const openMemoryDrawer = async () => {
+  memoryDrawerOpen.value = true;
+  if (!memoryProfiles.value.length && !memoryEvents.value.length) {
+    await loadUserMemorySnapshot();
+  }
+};
+
+const closeMemoryDrawer = () => {
+  memoryDrawerOpen.value = false;
+};
+
+const toggleProfileSelection = (memoryKey) => {
+  const key = String(memoryKey || "");
+  if (!key) {
+    return;
+  }
+  if (selectedProfileKeys.value.includes(key)) {
+    selectedProfileKeys.value = selectedProfileKeys.value.filter((item) => item !== key);
+    return;
+  }
+  selectedProfileKeys.value = [...selectedProfileKeys.value, key];
+};
+
+const toggleConversationSelection = (conversationId) => {
+  const id = String(conversationId || "");
+  if (!id) {
+    return;
+  }
+  if (selectedConversationIds.value.includes(id)) {
+    selectedConversationIds.value = selectedConversationIds.value.filter((item) => item !== id);
+    return;
+  }
+  selectedConversationIds.value = [...selectedConversationIds.value, id];
+};
+
+const selectAllFilteredProfiles = () => {
+  selectedProfileKeys.value = filteredMemoryProfiles.value.map((item) => item.memory_key).filter(Boolean);
+};
+
+const clearProfileSelection = () => {
+  selectedProfileKeys.value = [];
+};
+
+const selectAllFilteredConversations = () => {
+  selectedConversationIds.value = groupedFilteredMemoryEvents.value.map((item) => item.conversation_id).filter(Boolean);
+};
+
+const clearConversationSelection = () => {
+  selectedConversationIds.value = [];
+};
+
+const updateMemoryOperationReport = (label, total, success, failed, operationType) => {
+  memoryOperationReport.value = {
+    label,
+    total,
+    success,
+    failed,
+    operationType,
+    timestamp: new Date().toISOString(),
+  };
+};
+
+const cancelMemoryBatch = () => {
+  memoryBatchController.value = {
+    ...memoryBatchController.value,
+    cancelled: true,
+  };
+};
+
+const executeBatchWithConcurrency = async (items, worker, options = {}) => {
+  const queue = Array.from(items || []);
+  const total = queue.length;
+  const concurrency = options.concurrency || memoryActionConcurrency.value;
+  const runId = memoryBatchController.value.runId + 1;
+  memoryBatchController.value = {
+    runId,
+    cancelled: false,
+  };
+  memoryProgress.value = {
+    label: options.label || "批量执行",
+    total,
+    processed: 0,
+    success: 0,
+    failed: 0,
+    running: total > 0,
+  };
+  const failed = [];
+  let success = 0;
+  let processed = 0;
+  const runner = async () => {
+    while (queue.length) {
+      if (
+        memoryBatchController.value.cancelled ||
+        memoryBatchController.value.runId !== runId
+      ) {
+        break;
+      }
+      const item = queue.shift();
+      try {
+        const ok = await worker(item);
+        if (ok) {
+          success += 1;
+        } else {
+          failed.push(item);
+        }
+      } catch {
+        failed.push(item);
+      }
+      processed += 1;
+      memoryProgress.value = {
+        ...memoryProgress.value,
+        processed,
+        success,
+        failed: failed.length,
+        running: processed < total,
+      };
+    }
+  };
+  const workerCount = Math.max(1, Math.min(concurrency, queue.length || 1));
+  await Promise.all(Array.from({ length: workerCount }, () => runner()));
+  memoryProgress.value = {
+    ...memoryProgress.value,
+    processed,
+    success,
+    failed: failed.length,
+    running: false,
+  };
+  return {
+    success,
+    failed,
+    total,
+    cancelled: memoryBatchController.value.cancelled,
+    remaining: queue.length,
+  };
+};
+
+const deleteProfileBatch = async (userId, collectionId, memoryKeys) => {
+  return executeBatchWithConcurrency(
+    memoryKeys,
+    async (memoryKey) => {
+      const response = await deleteUserMemoryProfile(userId, memoryKey, collectionId);
+      return response?.status === 200;
+    },
+    {
+      concurrency: memoryActionConcurrency.value,
+      label: "画像删除",
+    }
+  );
+};
+
+const deleteConversationBatch = async (userId, collectionId, conversationIds) => {
+  return executeBatchWithConcurrency(
+    conversationIds,
+    async (conversationId) => {
+      const response = await deleteConversationMemory(userId, conversationId, collectionId);
+      return response?.status === 200;
+    },
+    {
+      concurrency: memoryActionConcurrency.value,
+      label: "会话删除",
+    }
+  );
+};
+
+const removeSelectedProfileMemories = async () => {
+  if (!selectedProfileKeys.value.length) {
+    return;
+  }
+  const userId = String(authStore.user?.id || "default_user");
+  const collectionId = resolveMemoryCollectionId();
+  try {
+    await ElMessageBox.confirm(`确定批量删除 ${selectedProfileKeys.value.length} 条画像记忆吗？`, "批量删除确认", {
+      type: "warning",
+      confirmButtonText: "删除",
+      cancelButtonText: "取消",
+    });
+    memoryActionLoading.value = true;
+    const total = selectedProfileKeys.value.length;
+    const result = await deleteProfileBatch(userId, collectionId, selectedProfileKeys.value);
+    const reportLabel = result.cancelled ? "画像批量删除（已取消）" : "画像批量删除";
+    const failedItems = [...result.failed];
+    updateMemoryOperationReport(reportLabel, total, result.success, failedItems, "profile");
+    if (result.cancelled) {
+      ElMessage.warning(`任务已取消，已处理 ${result.success + failedItems.length}/${total} 条`);
+    } else if (failedItems.length) {
+      ElMessage.warning(`已删除 ${result.success}/${total} 条，失败 ${result.failed.length} 条`);
+    } else {
+      ElMessage.success(`已删除 ${result.success}/${total} 条画像记忆`);
+    }
+    await loadUserMemorySnapshot();
+  } catch (error) {
+    if (error !== "cancel") {
+      ElMessage.error(error.message || "批量删除画像记忆失败");
+    }
+  } finally {
+    memoryActionLoading.value = false;
+  }
+};
+
+const removeSelectedConversationMemories = async () => {
+  if (!selectedConversationIds.value.length) {
+    return;
+  }
+  const userId = String(authStore.user?.id || "default_user");
+  const collectionId = resolveMemoryCollectionId();
+  try {
+    await ElMessageBox.confirm(`确定批量删除 ${selectedConversationIds.value.length} 个会话事件记忆吗？`, "批量删除确认", {
+      type: "warning",
+      confirmButtonText: "删除",
+      cancelButtonText: "取消",
+    });
+    memoryActionLoading.value = true;
+    const total = selectedConversationIds.value.length;
+    const result = await deleteConversationBatch(userId, collectionId, selectedConversationIds.value);
+    const reportLabel = result.cancelled ? "会话事件批量删除（已取消）" : "会话事件批量删除";
+    const failedItems = [...result.failed];
+    updateMemoryOperationReport(reportLabel, total, result.success, failedItems, "conversation");
+    if (result.cancelled) {
+      ElMessage.warning(`任务已取消，已处理 ${result.success + failedItems.length}/${total} 个会话`);
+    } else if (failedItems.length) {
+      ElMessage.warning(`已删除 ${result.success}/${total} 个会话，失败 ${result.failed.length} 个`);
+    } else {
+      ElMessage.success(`已删除 ${result.success}/${total} 个会话事件组`);
+    }
+    await loadUserMemorySnapshot();
+  } catch (error) {
+    if (error !== "cancel") {
+      ElMessage.error(error.message || "批量删除会话记忆失败");
+    }
+  } finally {
+    memoryActionLoading.value = false;
+  }
+};
+
+const copyFailedItems = async () => {
+  if (!memoryOperationReport.value?.failed?.length) {
+    return;
+  }
+  const prefix =
+    memoryOperationReport.value.operationType === "profile"
+      ? "memory_key"
+      : "conversation_id";
+  const text = memoryOperationReport.value.failed
+    .map((item) => `${prefix}:${item}`)
+    .join("\n");
+  try {
+    await navigator.clipboard.writeText(text);
+    ElMessage.success("失败项已复制");
+  } catch {
+    ElMessage.error("复制失败");
+  }
+};
+
+const retryFailedMemoryOperation = async () => {
+  if (!memoryOperationReport.value?.failed?.length) {
+    return;
+  }
+  const userId = String(authStore.user?.id || "default_user");
+  const collectionId = resolveMemoryCollectionId();
+  const operationType = memoryOperationReport.value.operationType;
+  const failedItems = [...memoryOperationReport.value.failed];
+  try {
+    memoryActionLoading.value = true;
+    if (operationType === "profile") {
+      const result = await deleteProfileBatch(userId, collectionId, failedItems);
+      updateMemoryOperationReport("画像失败重试", failedItems.length, result.success, result.failed, "profile");
+      if (result.failed.length) {
+        ElMessage.warning(`重试成功 ${result.success}/${failedItems.length}，仍失败 ${result.failed.length}`);
+      } else {
+        ElMessage.success(`重试成功 ${result.success}/${failedItems.length}`);
+      }
+    } else if (operationType === "conversation") {
+      const result = await deleteConversationBatch(userId, collectionId, failedItems);
+      updateMemoryOperationReport("会话失败重试", failedItems.length, result.success, result.failed, "conversation");
+      if (result.failed.length) {
+        ElMessage.warning(`重试成功 ${result.success}/${failedItems.length}，仍失败 ${result.failed.length}`);
+      } else {
+        ElMessage.success(`重试成功 ${result.success}/${failedItems.length}`);
+      }
+    }
+    await loadUserMemorySnapshot();
+  } catch (error) {
+    ElMessage.error(error.message || "重试失败项失败");
+  } finally {
+    memoryActionLoading.value = false;
+  }
 };
 
 // 监听点击外部关闭下拉框
@@ -1804,15 +2918,27 @@ onMounted(async () => {
       await loadKnowledgeLibraries();
 
       // 从本地存储加载RAG模式设置
-      const savedRagMode = localStorage.getItem("ragMode");
+      const savedRagMode = localStorage.getItem(ragModeStorageKey);
       if (savedRagMode) {
         ragMode.value = savedRagMode;
       }
 
       // 从本地存储加载选中的知识库
-      const savedLibrary = localStorage.getItem("selectedLibrary");
-      if (savedLibrary) {
-        selectedLibrary.value = savedLibrary;
+      const savedLibrary = localStorage.getItem(selectedLibraryStorageKey);
+      if (savedLibrary && savedLibrary !== "null" && savedLibrary !== "undefined") {
+        selectedLibrary.value = normalizeSelectedLibraryValue(savedLibrary);
+      }
+
+      const savedMaxRetrievalDocs = Number(
+        localStorage.getItem(maxRetrievalDocsStorageKey)
+      );
+      if (Number.isFinite(savedMaxRetrievalDocs) && savedMaxRetrievalDocs >= 1 && savedMaxRetrievalDocs <= 10) {
+        maxRetrievalDocs.value = savedMaxRetrievalDocs;
+      }
+
+      const savedSystemPrompt = localStorage.getItem(systemPromptStorageKey);
+      if (savedSystemPrompt && savedSystemPrompt.trim()) {
+        systemPrompt.value = savedSystemPrompt;
       }
 
       // 检查是否需要显示知识库选择弹窗
@@ -1917,17 +3043,48 @@ watch(
 // 监听RAG模式变化并保存到本地存储
 watch(ragMode, (newMode) => {
   console.log("🔄 RAG模式变化:", newMode);
-  localStorage.setItem("ragMode", newMode);
+  localStorage.setItem(ragModeStorageKey, newMode);
 });
 
 // 监听知识库选择变化并保存到本地存储
 watch(selectedLibrary, (newLibrary) => {
   console.log("🔄 知识库选择变化:", newLibrary);
+  const normalizedLibrary = normalizeSelectedLibraryValue(newLibrary);
+  if (newLibrary !== normalizedLibrary) {
+    selectedLibrary.value = normalizedLibrary;
+    return;
+  }
   const libraryName = newLibrary
     ? getSelectedLibraryName(newLibrary)
     : "不使用知识库";
   console.log("  -> 知识库名称:", libraryName);
-  localStorage.setItem("selectedLibrary", newLibrary);
+  if (newLibrary) {
+    localStorage.setItem(selectedLibraryStorageKey, newLibrary);
+  } else {
+    localStorage.removeItem(selectedLibraryStorageKey);
+  }
+});
+
+watch(maxRetrievalDocs, (newValue) => {
+  const normalized = Number(newValue);
+  if (Number.isFinite(normalized)) {
+    localStorage.setItem(maxRetrievalDocsStorageKey, String(normalized));
+  }
+});
+
+watch(systemPrompt, (newValue) => {
+  const normalized = String(newValue || "").trim();
+  if (normalized) {
+    localStorage.setItem(systemPromptStorageKey, normalized);
+  } else {
+    localStorage.removeItem(systemPromptStorageKey);
+  }
+});
+
+watch(selectedLibrary, async () => {
+  if (settingsModalOpen.value) {
+    await loadUserMemorySnapshot();
+  }
 });
 
 // 监听流式消息内容变化，自动滚动到底部
@@ -1972,9 +3129,10 @@ const getRagModeDescription = (mode) => {
 };
 
 // 打开设置弹窗
-const openSettingsModal = () => {
+const openSettingsModal = async () => {
   isSettingsForConversationSwitch.value = false;
   settingsModalOpen.value = true;
+  await loadUserMemorySnapshot();
 };
 
 // 关闭设置弹窗（确认保存）
@@ -2010,14 +3168,20 @@ const resetSettings = () => {
   maxRetrievalDocs.value = 3;
   systemPrompt.value =
     "你是一个专业的RAG助手，能够基于检索到的信息提供准确的回答。";
+  localStorage.removeItem(ragModeStorageKey);
+  localStorage.removeItem(selectedLibraryStorageKey);
+  localStorage.removeItem(maxRetrievalDocsStorageKey);
+  localStorage.removeItem(systemPromptStorageKey);
 };
 
 // 确认知识库选择
 const confirmLibrarySelection = () => {
-  selectedLibrary.value = selectedLibraryForDialog.value;
+  selectedLibrary.value = normalizeSelectedLibraryValue(selectedLibraryForDialog.value);
 
   // 保存到localStorage
-  localStorage.setItem("selectedLibrary", selectedLibrary.value);
+  if (selectedLibrary.value) {
+    localStorage.setItem(selectedLibraryStorageKey, selectedLibrary.value);
+  }
 
   // 如果选择了"不再显示"，保存到localStorage
   if (dontShowLibrarySelectAgain.value) {
@@ -2046,7 +3210,7 @@ const goToDocumentLibrary = () => {
 // 检查是否需要显示知识库选择弹窗
 const checkShowLibrarySelectDialog = () => {
   const dontShow = localStorage.getItem("dontShowLibrarySelect");
-  const savedLibrary = localStorage.getItem("selectedLibrary");
+  const savedLibrary = localStorage.getItem(selectedLibraryStorageKey);
 
   // 如果用户选择了"不再显示"或已经选择过知识库，则不显示弹窗
   if (dontShow === "true" || savedLibrary) {
@@ -2055,7 +3219,7 @@ const checkShowLibrarySelectDialog = () => {
 
   // 显示知识库选择弹窗
   showLibrarySelectDialog.value = true;
-  selectedLibraryForDialog.value = selectedLibrary.value;
+  selectedLibraryForDialog.value = normalizeSelectedLibraryValue(selectedLibrary.value);
 };
 
 // Agent面板调整大小相关函数

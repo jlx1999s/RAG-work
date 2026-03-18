@@ -1,6 +1,4 @@
-from venv import logger
 from langgraph.runtime import Runtime
-from langgraph.prebuilt import create_react_agent
 from ..states.raggraph_state import RAGGraphState
 from ..contexts.raggraph_context import RAGContext
 from ..models.raggraph_models import RetrievalMode, RetrievedDocument
@@ -8,11 +6,9 @@ from ..prompts.raggraph_prompt import (
     RAGGraphPrompts,
     RetrievalNeedDecision,
     SubquestionExpansion,
-    RetrievalTypeDecision,
     ToolSkillDecision
 )
-from langmem import create_manage_memory_tool, create_search_memory_tool
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage
 from ...config.log import get_logger
 from backend.agent.tools.exceptions import (
     ToolCallException,
@@ -108,6 +104,7 @@ class RAGNodes:
         self.key_clause_bonus = float(os.getenv("RAG_KEY_CLAUSE_BONUS", "0.015"))
         self.evidence_level_bonus = float(os.getenv("RAG_EVIDENCE_LEVEL_BONUS", "0.012"))
         self.assessment_skill_name = "health_risk_assessment"
+        self.tool_pending_ttl_seconds = float(os.getenv("RAG_TOOL_PENDING_TTL_SECONDS", "180"))
         self.enable_subquestion_expansion = os.getenv("RAG_ENABLE_SUBQUESTION_EXPANSION", "true").lower() in {"true", "1", "yes", "on"}
         self.subquestion_max_count = int(os.getenv("RAG_SUBQUESTION_MAX_COUNT", "3"))
         self.subquestion_trigger_min_chars = int(os.getenv("RAG_SUBQUESTION_TRIGGER_MIN_CHARS", "20"))
@@ -157,12 +154,12 @@ class RAGNodes:
             "hypertension_risk_assessment": {
                 "required_params": ["age", "systolic_bp", "diastolic_bp"],
                 "display_name": "高血压风险评估",
-                "trigger_keywords": ["高血压", "血压", "收缩压", "舒张压", "高压", "低压"]
+                "trigger_keywords": ["高血压", "血压", "收缩压", "舒张压", "高压", "低压", "systolic", "diastolic", "systolic_bp", "diastolic_bp", "sbp", "dbp"]
             },
             "diabetes_risk_assessment": {
                 "required_params": ["age", "bmi"],
                 "display_name": "糖尿病风险评估",
-                "trigger_keywords": ["糖尿病", "血糖", "bmi", "体重指数"]
+                "trigger_keywords": ["糖尿病", "血糖", "bmi", "体重指数", "diabetes", "glucose"]
             }
         }
 
@@ -798,6 +795,15 @@ class RAGNodes:
         refs = "".join(f"[{idx}]" for idx in ref_ids[:6])
         return f"根据检索到的上下文，联系方式为：{'；'.join(parts)}。{refs}"
 
+    def _extract_memory_guidance(self, state: RAGGraphState) -> str:
+        messages = state.get("messages", []) or []
+        for msg in messages:
+            role = getattr(msg, "type", "")
+            content = msg.content if hasattr(msg, "content") else str(msg)
+            if role == "system" and isinstance(content, str) and content.startswith("请在回答时优先遵循以下用户记忆。"):
+                return content.strip()
+        return ""
+
     def _get_cached_item(self, cache_store: dict, cache_key: str):
         if not self.retrieval_cache_enabled:
             return None
@@ -980,13 +986,92 @@ class RAGNodes:
             slots["systolic_bp"] = int(bp_pair_match.group(1))
             slots["diastolic_bp"] = int(bp_pair_match.group(2))
         else:
-            systolic_match = re.search(r"(?:收缩压|高压)\s*[:：]?\s*(\d{2,3})", question)
-            diastolic_match = re.search(r"(?:舒张压|低压)\s*[:：]?\s*(\d{2,3})", question)
+            systolic_match = re.search(r"(?:收缩压|高压|systolic(?:_bp)?|sbp)\s*(?:[:：=]|是|为)?\s*(\d{2,3})", question, re.IGNORECASE)
+            diastolic_match = re.search(r"(?:舒张压|低压|diastolic(?:_bp)?|dbp)\s*(?:[:：=]|是|为)?\s*(\d{2,3})", question, re.IGNORECASE)
             if systolic_match:
                 slots["systolic_bp"] = int(systolic_match.group(1))
             if diastolic_match:
                 slots["diastolic_bp"] = int(diastolic_match.group(1))
         return slots
+
+    def _extract_message_content(self, message) -> str:
+        if hasattr(message, "content"):
+            return str(getattr(message, "content", "") or "")
+        if isinstance(message, dict):
+            return str(message.get("content", "") or "")
+        return str(message or "")
+
+    def _is_assistant_message(self, message) -> bool:
+        if hasattr(message, "type"):
+            return str(getattr(message, "type", "")).lower() in {"ai", "assistant"}
+        if isinstance(message, dict):
+            return str(message.get("role", "")).lower() in {"assistant", "ai"}
+        return False
+
+    def _resolve_pending_assessment_tool(self, messages: list) -> str:
+        if not messages:
+            return ""
+        for message in reversed(messages):
+            if not self._is_assistant_message(message):
+                continue
+            content = self._extract_message_content(message)
+            if "还需要补充以下参数" not in content:
+                return ""
+            for tool_name, profile in self.assessment_profiles.items():
+                display_name = profile.get("display_name", "")
+                if display_name and display_name in content:
+                    return tool_name
+                if tool_name in content:
+                    return tool_name
+            if "高血压" in content or "血压" in content:
+                return "hypertension_risk_assessment" if "hypertension_risk_assessment" in self.tool_map else ""
+            if "糖尿病" in content or "血糖" in content or "bmi" in content.lower():
+                return "diabetes_risk_assessment" if "diabetes_risk_assessment" in self.tool_map else ""
+            return ""
+        return ""
+
+    def _is_pending_followup_for_tool(self, tool_name: str, question: str) -> bool:
+        if not tool_name:
+            return False
+        question_text = str(question or "").strip().lower()
+        if not question_text:
+            return False
+        extracted_slots = self._extract_required_slots(tool_name, question_text)
+        if extracted_slots:
+            return True
+        profile = self.assessment_profiles.get(tool_name, {})
+        trigger_keywords = [str(item).lower() for item in profile.get("trigger_keywords", [])]
+        return any(keyword and keyword in question_text for keyword in trigger_keywords)
+
+    def _clear_pending_tool_state(self, state: RAGGraphState) -> None:
+        state["pending_tool_name"] = ""
+        state["pending_tool_deadline_ms"] = 0
+
+    def _set_pending_tool_state(self, state: RAGGraphState, tool_name: str) -> None:
+        ttl_ms = max(1, int(self.tool_pending_ttl_seconds * 1000))
+        state["pending_tool_name"] = str(tool_name or "")
+        state["pending_tool_deadline_ms"] = int(time.time() * 1000) + ttl_ms
+
+    def _collect_recent_tool_slots(self, tool_name: str, messages: list, lookback: int = 8) -> dict:
+        if not tool_name or not messages:
+            return {}
+        required_params = self.assessment_profiles.get(tool_name, {}).get("required_params", [])
+        if not required_params:
+            return {}
+        collected = {}
+        for message in reversed(messages[-lookback:]):
+            content = self._extract_message_content(message)
+            if not content:
+                continue
+            extracted = self._extract_required_slots(tool_name, content)
+            if not extracted:
+                continue
+            for key, value in extracted.items():
+                if key not in collected:
+                    collected[key] = value
+            if all(param in collected for param in required_params):
+                break
+        return collected
 
     def _extract_diabetes_slots(self, question: str) -> dict:
         slots = {}
@@ -1059,7 +1144,9 @@ class RAGNodes:
         state["selected_skill"] = ""
         state["selected_tool"] = ""
         state["tool_missing_params"] = []
+        state["tool_prefilled_args"] = {}
         state["tool_selection_reason"] = ""
+        state["tool_clarify_message"] = ""
         if not self.tools:
             return state
 
@@ -1068,8 +1155,25 @@ class RAGNodes:
             return state
 
         user_question = messages[-1].content if hasattr(messages[-1], "content") else str(messages[-1])
-        if not self._is_assessment_skill_candidate(user_question):
+        pending_tool = ""
+        now_ms = int(time.time() * 1000)
+        state_pending_tool = str(state.get("pending_tool_name") or "").strip()
+        state_pending_deadline = self._safe_int(state.get("pending_tool_deadline_ms"), 0)
+        if state_pending_tool and state_pending_deadline <= now_ms:
+            self._clear_pending_tool_state(state)
+            state_pending_tool = ""
+        if state_pending_tool in self.tool_map and state_pending_deadline > now_ms:
+            pending_tool = state_pending_tool
+        if pending_tool and not self._is_pending_followup_for_tool(pending_tool, user_question):
+            pending_tool = ""
+        history_pending_tool = self._resolve_pending_assessment_tool(messages[:-1])
+        if not pending_tool and history_pending_tool and self._is_pending_followup_for_tool(history_pending_tool, user_question):
+            pending_tool = history_pending_tool
+        if pending_tool and not self._is_pending_followup_for_tool(pending_tool, user_question):
+            pending_tool = ""
+        if not self._is_assessment_skill_candidate(user_question) and not pending_tool:
             self.logger.info("未命中评估技能轻量门控，跳过技能激活")
+            self._clear_pending_tool_state(state)
             return state
 
         available_profile_lines = []
@@ -1081,6 +1185,9 @@ class RAGNodes:
         profiles_text = "\n".join(available_profile_lines)
         if not profiles_text:
             return state
+        selected_tool = pending_tool
+        missing_params = []
+        selection_reason = "承接上一轮补参流程" if pending_tool else ""
         try:
             prompt = f"""你是健康风险评估技能路由器。请判断是否激活评估技能，并选择最匹配的工具。
 可用评估工具:
@@ -1091,31 +1198,46 @@ class RAGNodes:
 2) selected_tool只能从可用评估工具里选择
 3) missing_params只包含必需参数缺失项
 4) 如果不激活技能，selected_tool返回null"""
-            structured_llm = self.llm.with_structured_output(ToolSkillDecision)
-            decision = structured_llm.invoke(prompt)
-            selected_tool = (decision.selected_tool or "").strip()
-            if selected_tool and selected_tool not in self.tool_map:
-                selected_tool = ""
+            if not pending_tool:
+                structured_llm = self.llm.with_structured_output(ToolSkillDecision)
+                decision = structured_llm.invoke(prompt)
+                selected_tool = (decision.selected_tool or "").strip()
+                if selected_tool and selected_tool not in self.tool_map:
+                    selected_tool = ""
+                selection_reason = decision.reasoning
             if not selected_tool:
                 if any(keyword in user_question for keyword in ["高血压", "血压", "收缩压", "舒张压", "高压", "低压"]):
                     selected_tool = "hypertension_risk_assessment" if "hypertension_risk_assessment" in self.tool_map else ""
-                elif any(keyword in user_question.lower() for keyword in ["糖尿病", "血糖", "bmi", "体重指数"]):
+                elif any(keyword in user_question.lower() for keyword in ["糖尿病", "血糖", "bmi", "体重指数", "diabetes", "glucose"]):
                     selected_tool = "diabetes_risk_assessment" if "diabetes_risk_assessment" in self.tool_map else ""
-            missing_params = list(decision.missing_params or [])
             if selected_tool:
-                inferred_missing = self._missing_required_params(selected_tool, user_question)
-                missing_params = list(dict.fromkeys([*missing_params, *inferred_missing]))
+                prefilled_args = self._collect_recent_tool_slots(selected_tool, messages)
+                required_params = self.assessment_profiles.get(selected_tool, {}).get("required_params", [])
+                missing_params = [param for param in required_params if param not in prefilled_args]
+                state["tool_prefilled_args"] = prefilled_args
             state["selected_skill"] = self.assessment_skill_name if selected_tool else ""
             state["selected_tool"] = selected_tool
             state["tool_missing_params"] = missing_params
-            state["tool_selection_reason"] = decision.reasoning
+            state["tool_selection_reason"] = selection_reason
             state["need_tool"] = bool(state["selected_skill"] and state["selected_tool"])
+            if not state["selected_tool"]:
+                self._clear_pending_tool_state(state)
+                state["selected_skill"] = self.assessment_skill_name
+                state["tool_selection_reason"] = "需要明确评估类型"
+                state["tool_clarify_message"] = "请说明要评估的类型（高血压风险评估 / 糖尿病风险评估），并提供对应参数，例如年龄、血压或BMI。"
+                state["need_tool"] = True
+            elif missing_params:
+                self._set_pending_tool_state(state, state["selected_tool"])
+            else:
+                self._clear_pending_tool_state(state)
             self.logger.info(
                 f"技能路由: need_tool={state['need_tool']}, skill={state['selected_skill']}, tool={state['selected_tool']}, missing={missing_params}"
             )
         except Exception as e:
             self.logger.error(f"技能路由失败: {e}")
             state["need_tool"] = False
+            state["tool_prefilled_args"] = {}
+            self._clear_pending_tool_state(state)
         return state
 
     def tool_calling_node(self, state: RAGGraphState, runtime: Runtime[RAGContext]) -> RAGGraphState:
@@ -1125,11 +1247,20 @@ class RAGNodes:
         user_question = messages[-1].content if messages and hasattr(messages[-1], "content") else ""
         selected_skill = state.get("selected_skill", "")
         selected_tool = state.get("selected_tool")
+        prefilled_args = state.get("tool_prefilled_args", {}) or {}
         self.logger.info(f"用户问题: {user_question}")
         self.logger.info(f"选中的技能: {selected_skill}")
         self.logger.info(f"选中的工具: {selected_tool}")
+        self.logger.info(f"预提取参数: {prefilled_args}")
+        clarify_message = state.get("tool_clarify_message")
+        if clarify_message:
+            self._clear_pending_tool_state(state)
+            state["final_answer"] = clarify_message
+            state["messages"] = [AIMessage(content=clarify_message)]
+            return state
         missing_params = state.get("tool_missing_params", [])
         if missing_params:
+            self._set_pending_tool_state(state, selected_tool or "")
             answer = self._build_missing_params_answer(selected_tool or "", missing_params)
             state["final_answer"] = answer
             state["messages"] = [AIMessage(content=answer)]
@@ -1151,6 +1282,7 @@ class RAGNodes:
 已选择技能：{selected_skill}
 你必须且只能调用工具：{selected_tool}
 必需参数：{required_params_text}
+历史上下文已提取参数：{json.dumps(prefilled_args, ensure_ascii=False)}
 请从用户问题中抽取参数并调用工具。"""
             self.logger.info("调用LLM，期待工具调用...")
             response = llm_with_tools.invoke(prompt)
@@ -1163,9 +1295,13 @@ class RAGNodes:
                     state["messages"] = [AIMessage(content=state["final_answer"])]
                     return state
                 selected_call = target_calls[0]
-                tool_args = selected_call.get("args", {})
+                model_args = selected_call.get("args", {}) or {}
+                if not isinstance(model_args, dict):
+                    model_args = {}
+                tool_args = {**prefilled_args, **model_args}
                 validation_errors = self._validate_tool_args(selected_tool, tool_args)
                 if validation_errors:
+                    self._set_pending_tool_state(state, selected_tool)
                     error = ToolValidationError(
                         tool_name=selected_tool,
                         validation_errors=validation_errors,
@@ -1217,6 +1353,7 @@ class RAGNodes:
 请用通俗语言解释结论并给出可执行建议。"""
                 final_response = self.llm.invoke(final_prompt)
                 state["final_answer"] = final_response.content
+                self._clear_pending_tool_state(state)
                 state["answer_sources"] = [{
                     "index": 1,
                     "tool_name": selected_tool,
@@ -2243,6 +2380,9 @@ class RAGNodes:
                 documents=documents_text,
                 doc_count=len(retrieved_docs)
             )
+            memory_guidance = self._extract_memory_guidance(state)
+            if memory_guidance:
+                prompt = f"{prompt}\n\n【用户记忆】\n{memory_guidance}\n"
 
             # 调用LLM生成答案
             answer_result = self.llm.invoke(prompt)

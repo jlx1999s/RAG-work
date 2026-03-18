@@ -4,16 +4,30 @@
 聊天服务层
 基于 RAGGraph 提供聊天功能
 """
-import uuid
 import time
+import re
 from typing import Dict, Any, AsyncGenerator, Optional, List
 from backend.config.agent import get_rag_graph_for_collection
 from backend.agent.contexts.raggraph_context import RAGContext
 from backend.param.chat import ChatRequest
 from backend.config.log import get_logger
 from backend.service import conversation as conversation_service
-from backend.service.chat_history import save_chat_message, get_chat_messages
+from backend.service.chat_history import (
+    save_chat_message,
+    get_chat_messages,
+    get_latest_conversation_summary,
+    get_recent_dialog_messages
+)
 from backend.agent.prompts.raggraph_prompt import RAGGraphPrompts
+from backend.service.memory import (
+    get_user_memory_context,
+    build_memory_system_prompt,
+    write_user_memory,
+    list_user_memories,
+    delete_memory_profile,
+    delete_memory_events_by_conversation,
+    delete_all_user_memory
+)
 
 logger = get_logger(__name__)
 
@@ -51,6 +65,40 @@ def _to_preview_text(value: Any, limit: int = 240) -> str:
     if len(text) <= limit:
         return text
     return f"{text[:limit]}..."
+
+
+def _collect_text_tokens(text: str) -> set[str]:
+    raw = str(text or "").lower()
+    cleaned = re.sub(r"[^\w\u4e00-\u9fff]+", " ", raw)
+    tokens = [token.strip() for token in cleaned.split() if token.strip()]
+    token_set: set[str] = set(tokens)
+    chinese_chunks = re.findall(r"[\u4e00-\u9fff]{2,}", raw)
+    token_set.update(chinese_chunks)
+    for chunk in chinese_chunks:
+        if len(chunk) <= 2:
+            continue
+        for idx in range(0, len(chunk) - 1):
+            token_set.add(chunk[idx:idx + 2])
+    return token_set
+
+
+def _is_context_relevant(query_text: str, context_text: str) -> bool:
+    query_tokens = _collect_text_tokens(query_text)
+    context_tokens = _collect_text_tokens(context_text)
+    if not query_tokens or not context_tokens:
+        return False
+    health_markers = {"高血压", "血压", "糖尿病", "血糖", "bmi", "发烧", "发热", "诊断", "治疗", "用药"}
+    query_lower = str(query_text or "").lower()
+    context_lower = str(context_text or "").lower()
+    query_has_health = any(marker in query_lower for marker in health_markers)
+    context_has_health = any(marker in context_lower for marker in health_markers)
+    if context_has_health and not query_has_health:
+        return False
+    overlap = len(query_tokens & context_tokens)
+    ratio = overlap / max(1, len(query_tokens))
+    if len(query_tokens) <= 3:
+        return overlap >= 1 and ratio >= 0.34
+    return overlap >= 2 and ratio >= 0.22
 
 def _serialize_docs(docs: Any, limit: int = 4) -> List[Dict[str, Any]]:
     serialized: List[Dict[str, Any]] = []
@@ -215,12 +263,17 @@ def _validate_chat_request(chat_request: ChatRequest) -> Dict[str, Any]:
             "error": "聊天内容过长，请控制在10000字符以内"
         }
     
-    # 验证用户ID
-    user_id = chat_request.user_id or "default_user"
-    if not str(user_id).strip():
+    # 验证用户ID（必须由鉴权层注入）
+    user_id = str(chat_request.user_id or "").strip()
+    if not user_id:
         return {
             "valid": False,
             "error": "用户ID不能为空"
+        }
+    if not user_id.isdigit() or int(user_id) <= 0:
+        return {
+            "valid": False,
+            "error": "用户ID格式错误"
         }
     
     return {
@@ -254,6 +307,7 @@ async def chat_stream(chat_request: ChatRequest) -> AsyncGenerator[Dict[str, Any
         
         user_id = validation["user_id"]
         content = validation["content"]
+        user_content = content
         
         # 获取 collection_id，如果没有提供则使用默认值
         collection_id = chat_request.collection_id or "kb12_1760260169325"
@@ -276,7 +330,7 @@ async def chat_stream(chat_request: ChatRequest) -> AsyncGenerator[Dict[str, Any
         # 如果没有提供conversation_id，创建新的对话
         if not session_id or not str(session_id).strip():
             # 创建新对话
-            title = content[:50] + "..." if len(content) > 50 else content
+            title = user_content[:50] + "..." if len(user_content) > 50 else user_content
             result = await conversation_service.create_conversation(
                 user_id=user_id,
                 title=title
@@ -302,6 +356,17 @@ async def chat_stream(chat_request: ChatRequest) -> AsyncGenerator[Dict[str, Any
                     "message": "指定的对话不存在"
                 }
                 return
+
+            conv_data = conv_result.get("data") or {}
+            conv_user_id = str(conv_data.get("user_id") or "").strip()
+            if conv_user_id != str(user_id):
+                logger.warning(f"用户 {user_id} 尝试访问不属于自己的会话: {session_id}")
+                yield {
+                    "type": "error",
+                    "error": "无权限访问该会话",
+                    "message": "无权限访问该会话"
+                }
+                return
             
             # 更新现有对话的时间戳
             await conversation_service.update_conversation_timestamp(session_id)
@@ -318,6 +383,12 @@ async def chat_stream(chat_request: ChatRequest) -> AsyncGenerator[Dict[str, Any
         # ===== 构造带长短期记忆的对话历史（会话内） =====
         history_messages: List[Dict[str, str]] = []
         conversation_summary: Optional[str] = None
+        memory_context = get_user_memory_context(
+            user_id=user_id,
+            collection_id=collection_id,
+            query_text=user_content
+        )
+        memory_prompt = build_memory_system_prompt(memory_context)
         try:
             # 从数据库获取该会话的历史消息（已按时间升序）
             history_records = get_chat_messages(session_id)
@@ -390,13 +461,18 @@ async def chat_stream(chat_request: ChatRequest) -> AsyncGenerator[Dict[str, Any
 
         # 准备输入数据：会话摘要（如有） + 短期历史对话 + 当前这轮用户问题
         input_messages: List[Dict[str, str]] = []
-        if conversation_summary:
+        if memory_prompt:
             input_messages.append({
                 "role": "system",
-                "content": f"本次对话的背景摘要：{conversation_summary}",
+                "content": memory_prompt
+            })
+        if conversation_summary and _is_context_relevant(user_content, conversation_summary):
+            input_messages.append({
+                "role": "system",
+                "content": f"本次对话的背景摘要（仅供参考，如与当前问题无关请忽略）：{conversation_summary}",
             })
         input_messages.extend(history_messages)
-        input_messages.append({"role": "user", "content": content})
+        input_messages.append({"role": "user", "content": user_content})
 
         input_data = {
             "messages": input_messages
@@ -416,12 +492,13 @@ async def chat_stream(chat_request: ChatRequest) -> AsyncGenerator[Dict[str, Any
             conversation_id=session_id,
             role="user",
             message_type="messages",
-            content=content,
+            content=user_content,
             extra_data={"node_name": "user_input"}
         )
         
         # 调用 RAGGraph stream 方法
         logger.info("调用 RAGGraph.stream 方法...")
+        latest_assistant_answer: Optional[str] = None
         
         try:
             step_index = 0
@@ -449,6 +526,7 @@ async def chat_stream(chat_request: ChatRequest) -> AsyncGenerator[Dict[str, Any
                             content=message_content,
                             extra_data=extra_data
                         )
+                        latest_assistant_answer = message_content
                         
                         # 发送来源信息到前端
                         if sources:
@@ -535,6 +613,13 @@ async def chat_stream(chat_request: ChatRequest) -> AsyncGenerator[Dict[str, Any
                 content=end_content,
                 extra_data=extra_data
             )
+            write_user_memory(
+                user_id=user_id,
+                collection_id=collection_id,
+                conversation_id=session_id,
+                user_message=user_content,
+                assistant_message=latest_assistant_answer
+            )
 
 
 
@@ -545,6 +630,7 @@ async def chat_stream(chat_request: ChatRequest) -> AsyncGenerator[Dict[str, Any
             try:
                 result = rag_graph.invoke(input_data, context)
                 if isinstance(result, dict) and "final_answer" in result and result["final_answer"]:
+                    latest_assistant_answer = result["final_answer"]
                     yield {
                         "type": "answer",
                         "session_id": session_id,
@@ -559,6 +645,13 @@ async def chat_stream(chat_request: ChatRequest) -> AsyncGenerator[Dict[str, Any
                         "session_id": session_id,
                         "content": content
                     }
+                write_user_memory(
+                    user_id=user_id,
+                    collection_id=collection_id,
+                    conversation_id=session_id,
+                    user_message=user_content,
+                    assistant_message=latest_assistant_answer
+                )
             except Exception as invoke_error:
                 logger.error(f"普通调用也失败: {str(invoke_error)}")
                 yield {
@@ -621,6 +714,14 @@ async def get_chat_history_list(user_id: str, conversation_id: Optional[str] = N
                     "success": False,
                     "error": "对话不存在",
                     "message": "指定的对话不存在"
+                }
+            conv_data = conv_result.get("data") or {}
+            conv_user_id = str(conv_data.get("user_id") or "").strip()
+            if conv_user_id != str(user_id):
+                return {
+                    "success": False,
+                    "error": "无权限访问该会话",
+                    "message": "无权限访问该会话"
                 }
             
             try:
@@ -746,6 +847,14 @@ async def add_chat_history_list(user_id: str, conversation_id: str, message: Dic
                 "error": "对话不存在",
                 "message": "指定的对话不存在"
             }
+        conv_data = conv_result.get("data") or {}
+        conv_user_id = str(conv_data.get("user_id") or "").strip()
+        if conv_user_id != str(user_id):
+            return {
+                "success": False,
+                "error": "无权限访问该会话",
+                "message": "无权限访问该会话"
+            }
         
         # 验证消息格式
         if not isinstance(message, dict) or "role" not in message or "content" not in message:
@@ -848,3 +957,136 @@ async def delete_conversation(conversation_id: str) -> Dict[str, Any]:
         Dict[str, Any]: 删除结果
     """
     return await conversation_service.delete_conversation(conversation_id)
+
+
+async def get_user_conversations(user_id: str, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
+    return await conversation_service.get_conversations_by_user(user_id=user_id, limit=limit, offset=offset)
+
+
+async def delete_user_conversations(user_id: str) -> Dict[str, Any]:
+    return await conversation_service.delete_user_conversations(user_id)
+
+
+async def get_user_memory_snapshot(
+    user_id: str,
+    collection_id: str,
+    profile_limit: int = 50,
+    event_limit: int = 50,
+    conversation_id: Optional[str] = None,
+    short_term_limit: int = 10
+) -> Dict[str, Any]:
+    try:
+        started_at = time.perf_counter()
+        data = list_user_memories(
+            user_id=user_id,
+            collection_id=collection_id,
+            profile_limit=profile_limit,
+            event_limit=event_limit
+        )
+        conversation_summary = None
+        short_term_messages = []
+        target_conversation_id = str(conversation_id or "").strip()
+        if target_conversation_id:
+            try:
+                conversation_summary = get_latest_conversation_summary(conversation_id=target_conversation_id)
+                short_dialog = get_recent_dialog_messages(
+                    conversation_id=target_conversation_id,
+                    limit=short_term_limit
+                )
+                short_term_messages = [
+                    {
+                        "role": (item.get("role") or "").lower(),
+                        "content": (item.get("content") or "").strip()
+                    }
+                    for item in short_dialog
+                    if (item.get("content") or "").strip()
+                ]
+            except Exception as exc:
+                logger.warning(f"获取会话短期/摘要记忆失败: {exc}")
+                conversation_summary = None
+                short_term_messages = []
+
+        profiles = data.get("profiles") or []
+        events = data.get("events") or []
+        if target_conversation_id:
+            events = [
+                item for item in events
+                if str(item.get("conversation_id") or "").strip() == target_conversation_id
+            ]
+            data["events"] = events
+        profile_confidence_values = [
+            float(item.get("confidence") or 0.0)
+            for item in profiles
+            if item.get("confidence") is not None
+        ]
+        event_importance_values = [
+            float(item.get("importance") or 0.0)
+            for item in events
+            if item.get("importance") is not None
+        ]
+        avg_profile_confidence = round(
+            sum(profile_confidence_values) / len(profile_confidence_values), 4
+        ) if profile_confidence_values else 0.0
+        avg_event_importance = round(
+            sum(event_importance_values) / len(event_importance_values), 4
+        ) if event_importance_values else 0.0
+        hybrid_event_count = sum(1 for item in events if str(item.get("memory_source") or "") == "hybrid_vector")
+        recall_mode = "hybrid" if hybrid_event_count > 0 else "rule"
+        response_latency_ms = int((time.perf_counter() - started_at) * 1000)
+
+        data["conversation_id"] = target_conversation_id or None
+        data["short_term_messages"] = short_term_messages
+        data["conversation_summary"] = conversation_summary
+        data["memory_health"] = {
+            "profile_count": len(profiles),
+            "event_count": len(events),
+            "short_term_count": len(short_term_messages),
+            "avg_profile_confidence": avg_profile_confidence,
+            "avg_event_importance": avg_event_importance,
+            "hybrid_event_count": hybrid_event_count,
+            "recall_mode": recall_mode
+        }
+        data["metrics"] = {"response_latency_ms": response_latency_ms}
+        data["memory_kinds"] = {
+            "short_term": "会话内最近对话（不跨会话）",
+            "conversation_summary": "会话内长期摘要（不跨会话）",
+            "events": "当前会话事件记忆（按会话过滤）" if target_conversation_id else "跨会话事件记忆（按用户+知识库维度）",
+            "profiles": "跨会话画像记忆（按用户+知识库维度）",
+        }
+        return {"success": True, "data": data, "message": "获取用户记忆成功"}
+    except Exception as exc:
+        logger.error(f"获取用户记忆快照失败: {exc}")
+        return {"success": False, "error": str(exc), "message": "获取用户记忆失败"}
+
+
+async def remove_user_memory_profile(user_id: str, collection_id: str, memory_key: str) -> Dict[str, Any]:
+    ok = delete_memory_profile(user_id=user_id, collection_id=collection_id, memory_key=memory_key)
+    if ok:
+        return {
+            "success": True,
+            "data": {"user_id": user_id, "collection_id": collection_id, "memory_key": memory_key},
+            "message": "删除画像记忆成功"
+        }
+    return {"success": False, "message": "删除画像记忆失败或记录不存在"}
+
+
+async def remove_conversation_memory_events(user_id: str, collection_id: str, conversation_id: str) -> Dict[str, Any]:
+    count = delete_memory_events_by_conversation(
+        user_id=user_id,
+        collection_id=collection_id,
+        conversation_id=conversation_id
+    )
+    return {
+        "success": True,
+        "data": {"deleted_count": count, "conversation_id": conversation_id},
+        "message": "删除会话事件记忆完成"
+    }
+
+
+async def remove_all_user_memory(user_id: str, collection_id: str) -> Dict[str, Any]:
+    result = delete_all_user_memory(user_id=user_id, collection_id=collection_id)
+    return {
+        "success": True,
+        "data": {"deleted_profile_count": result.get("profiles", 0), "deleted_event_count": result.get("events", 0)},
+        "message": "删除用户记忆完成"
+    }

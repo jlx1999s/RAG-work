@@ -12,6 +12,7 @@ from backend.model.user import User
 from backend.model.conversation import Conversation
 from backend.model.knowledge_library import KnowledgeLibrary, KnowledgeDocument
 from backend.model.chat_history import ChatHistory
+from backend.model.memory import UserMemoryProfile, UserMemoryEvent
 
 
 def create_tables():

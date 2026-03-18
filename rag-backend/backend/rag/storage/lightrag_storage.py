@@ -1,5 +1,5 @@
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Optional
 import numpy as np
 from dotenv import load_dotenv
 import logging
@@ -245,19 +245,58 @@ class LightRAGStorage:
         try:
             if self.rag is None:
                 await self.initialize()
-            
-            # 通过 Neo4j 查询获取统计信息
-            graph = self.rag.chunk_entity_relation_graph
-            
-            # 这里需要根据 Neo4j 的实际 API 调整
-            # 以下是示例逻辑
+
+            from neo4j import AsyncGraphDatabase
+            uri = os.getenv("NEO4J_URI", "")
+            username = os.getenv("NEO4J_USERNAME", "")
+            password = os.getenv("NEO4J_PASSWORD", "")
+            if not uri or not username or not password:
+                return {
+                    "workspace": self.workspace,
+                    "entity_count": 0,
+                    "relation_count": 0,
+                    "entity_count_total": 0,
+                    "relation_count_total": 0
+                }
+            driver = AsyncGraphDatabase.driver(uri, auth=(username, password))
+            async with driver:
+                async with driver.session() as session:
+                    entity_total_res = await session.run("MATCH (n) RETURN count(n) AS total")
+                    relation_total_res = await session.run("MATCH ()-[r]->() RETURN count(r) AS total")
+                    entity_ws_res = await session.run(
+                        """
+                        MATCH (n)
+                        WHERE $workspace IN [n.workspace, n.workspace_id, n.namespace, n.tenant, n.tenant_id]
+                        RETURN count(n) AS total
+                        """,
+                        workspace=self.workspace
+                    )
+                    relation_ws_res = await session.run(
+                        """
+                        MATCH ()-[r]->()
+                        WHERE $workspace IN [r.workspace, r.workspace_id, r.namespace, r.tenant, r.tenant_id]
+                        RETURN count(r) AS total
+                        """,
+                        workspace=self.workspace
+                    )
+                    entity_total_row = await entity_total_res.single()
+                    relation_total_row = await relation_total_res.single()
+                    entity_ws_row = await entity_ws_res.single()
+                    relation_ws_row = await relation_ws_res.single()
+                    entity_total = int((entity_total_row or {}).get("total") or 0)
+                    relation_total = int((relation_total_row or {}).get("total") or 0)
+                    entity_count = int((entity_ws_row or {}).get("total") or 0)
+                    relation_count = int((relation_ws_row or {}).get("total") or 0)
+            if entity_count == 0 and relation_count == 0:
+                entity_count = entity_total
+                relation_count = relation_total
             stats = {
-                "entity_count": 0,
-                "relation_count": 0,
+                "entity_count": entity_count,
+                "relation_count": relation_count,
+                "entity_count_total": entity_total,
+                "relation_count_total": relation_total,
                 "workspace": self.workspace
             }
-            
-            # TODO: 实现实际的统计查询
             logger.info(f"图谱统计: {stats}")
             return stats
             

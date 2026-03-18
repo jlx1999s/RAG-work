@@ -1,9 +1,8 @@
 from typing import Dict, Any, List, TypedDict, Annotated, Optional
-from enum import Enum
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 from ..contexts.raggraph_context import RAGContext
-from ..models.raggraph_models import RetrievalMode, RetrievedDocument
+from ..models.raggraph_models import RetrievedDocument
 
 
 class RAGGraphState(TypedDict, total=False):
@@ -19,7 +18,6 @@ class RAGGraphState(TypedDict, total=False):
     session_id: str                    # 会话ID
     user_id: str                       # 用户ID（从context获取）
     original_question: str             # 原始问题
-    
     # ==================== Context相关 ====================
     retrieval_config: Dict[str, Any]   # 检索配置（从context获取）
     system_prompt: str                 # 系统提示（从context获取）
@@ -27,16 +25,19 @@ class RAGGraphState(TypedDict, total=False):
     # ==================== 流程控制 ====================
     retrieval_mode: str                # 检索模式（vector_only/hybrid/graph_only/no_retrieval/auto）
     need_retrieval: bool               # 是否需要检索
-    need_retrieval_reason: Optional[str] = ""    # 需要检索的理由
+    need_retrieval_reason: Optional[str]    # 需要检索的理由
     retrieval_decision_stats: Dict[str, Any]  # 检索决策链路统计
-    retrieval_mode_reason: Optional[str] = ""    # 检索模式的理由
+    retrieval_mode_reason: Optional[str]    # 检索模式的理由
     need_tool: bool                    # 是否需要调用工具
-    selected_tool: Optional[str] = ""        # 选中的工具名称
-    selected_skill: Optional[str] = ""       # 选中的技能名称
+    selected_tool: Optional[str]        # 选中的工具名称
+    selected_skill: Optional[str]       # 选中的技能名称
     tool_missing_params: List[str]           # 工具调用缺失参数
-    tool_selection_reason: Optional[str] = ""  # 工具/技能选择理由
+    tool_prefilled_args: Dict[str, Any]      # 从历史消息中提取的工具参数
+    tool_selection_reason: Optional[str]  # 工具/技能选择理由
+    tool_clarify_message: Optional[str]
+    pending_tool_name: Optional[str]
+    pending_tool_deadline_ms: int
     # ==================== 问题处理 ====================
-    original_question: str             # 原始问题
     subquestions: List[str]            # 扩展的子问题列表
     subquestion_expansion_stats: Dict[str, Any]  # 子问题扩展统计
     processed_questions: List[str]     # 已处理的问题列表
@@ -45,14 +46,15 @@ class RAGGraphState(TypedDict, total=False):
     retrieved_docs: List[RetrievedDocument]  # 检索到的文档列表
     vector_db_results: List[RetrievedDocument]  # 向量数据库检索结果
     graph_db_results: List[RetrievedDocument]   # 图数据库检索结果
+    graph_retrieval_stats: Dict[str, Any]  # 图检索统计信息
     retrieval_fusion_stats: Dict[str, Any]  # 融合检索统计信息
     
     # ==================== 答案生成 ====================
     final_answer: str                  # 最终答案
-    answer_sources: List[str]          # 答案来源列表
+    answer_sources: List[Dict[str, Any]]  # 答案来源列表
     
     # ==================== 错误处理 ====================
-    error: Optional[Dict[str, Any]] = None  # 结构化错误信息
+    error: Optional[Dict[str, Any]]  # 结构化错误信息
 
 
 def create_initial_rag_state(
@@ -94,7 +96,11 @@ def create_initial_rag_state(
         selected_tool="",
         selected_skill="",
         tool_missing_params=[],
+        tool_prefilled_args={},
         tool_selection_reason="",
+        tool_clarify_message="",
+        pending_tool_name="",
+        pending_tool_deadline_ms=0,
         
         # ==================== 问题处理 ====================
         original_question="",
@@ -106,6 +112,7 @@ def create_initial_rag_state(
         retrieved_docs=[],
         vector_db_results=[],
         graph_db_results=[],
+        graph_retrieval_stats={},
         retrieval_fusion_stats={},
         
         # ==================== 答案生成 ====================

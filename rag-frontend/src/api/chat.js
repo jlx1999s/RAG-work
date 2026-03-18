@@ -242,6 +242,58 @@ export async function deleteConversation(conversationId) {
   }
 }
 
+export async function getUserMemory(userId, collectionId, profileLimit = 50, eventLimit = 50, conversationId = null, shortTermLimit = 10) {
+  try {
+    const params = new URLSearchParams({
+      collection_id: collectionId,
+      profile_limit: String(profileLimit),
+      event_limit: String(eventLimit)
+    })
+    if (conversationId) {
+      params.set('conversation_id', String(conversationId))
+      params.set('short_term_limit', String(shortTermLimit))
+    }
+    const response = await httpClient.get(`/llm/memory/${userId}?${params.toString()}`)
+    return response
+  } catch (error) {
+    console.error('获取用户记忆失败:', error)
+    throw new Error(error.message || '获取用户记忆失败')
+  }
+}
+
+export async function deleteUserMemoryProfile(userId, memoryKey, collectionId) {
+  try {
+    const params = new URLSearchParams({ collection_id: collectionId })
+    const response = await httpClient.delete(`/llm/memory/${userId}/profile/${encodeURIComponent(memoryKey)}?${params.toString()}`)
+    return response
+  } catch (error) {
+    console.error('删除画像记忆失败:', error)
+    throw new Error(error.message || '删除画像记忆失败')
+  }
+}
+
+export async function deleteConversationMemory(userId, conversationId, collectionId) {
+  try {
+    const params = new URLSearchParams({ collection_id: collectionId })
+    const response = await httpClient.delete(`/llm/memory/${userId}/conversation/${conversationId}?${params.toString()}`)
+    return response
+  } catch (error) {
+    console.error('删除会话记忆失败:', error)
+    throw new Error(error.message || '删除会话记忆失败')
+  }
+}
+
+export async function deleteAllUserMemory(userId, collectionId) {
+  try {
+    const params = new URLSearchParams({ collection_id: collectionId })
+    const response = await httpClient.delete(`/llm/memory/${userId}?${params.toString()}`)
+    return response
+  } catch (error) {
+    console.error('删除全部记忆失败:', error)
+    throw new Error(error.message || '删除全部记忆失败')
+  }
+}
+
 /**
  * 流式聊天辅助类
  * 用于管理流式聊天的状态和事件

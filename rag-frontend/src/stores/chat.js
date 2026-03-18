@@ -32,6 +32,7 @@ export const useChatStore = defineStore('chat', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       saved: false, // 标记为未保存
+      persistenceStatus: 'draft',
       messages: [] // 为临时对话添加本地消息存储
     }
     
@@ -68,7 +69,8 @@ export const useChatStore = defineStore('chat', () => {
           title: conversationData.title,
           createdAt: new Date(conversationData.created_at),
           updatedAt: new Date(conversationData.updated_at),
-          saved: true
+          saved: true,
+          persistenceStatus: 'active'
         }
         
         // 更新当前对话
@@ -108,7 +110,8 @@ export const useChatStore = defineStore('chat', () => {
           title: conversationData.title,
           createdAt: new Date(conversationData.created_at),
           updatedAt: new Date(conversationData.updated_at),
-          saved: true
+          saved: true,
+          persistenceStatus: 'active'
         }
         
         conversations.value.unshift(conversation)
@@ -125,11 +128,13 @@ export const useChatStore = defineStore('chat', () => {
       
       // 如果API调用失败，回退到本地创建
       const conversation = {
-        id: Date.now().toString(),
+        id: `temp_${Date.now()}`,
         title,
         createdAt: new Date(),
         updatedAt: new Date(),
-        saved: false
+        saved: false,
+        persistenceStatus: 'failed',
+        messages: []
       }
       conversations.value.unshift(conversation)
       currentConversation.value = conversation
@@ -293,10 +298,14 @@ export const useChatStore = defineStore('chat', () => {
 
       // 构造聊天请求数据
       const authStore = useAuthStore()
+      const resolvedConversationId = conversationIdOverride ||
+        (currentConversation.value?.saved ? currentConversation.value.id : null)
       const chatData = {
         content: content,
-        conversation_id: conversationIdOverride || currentConversation.value.id,
         user_id: String(authStore.user?.id || 'default_user')
+      }
+      if (resolvedConversationId) {
+        chatData.conversation_id = resolvedConversationId
       }
       
       // 如果有RAG相关参数，添加到请求数据中
@@ -324,6 +333,45 @@ export const useChatStore = defineStore('chat', () => {
         (data) => {
           // 处理流式响应数据
           console.log('收到流式数据:', data)
+          
+          const syncConversationFromStream = (sessionIdRaw) => {
+            const backendConversationId = String(sessionIdRaw || '').trim()
+            if (!backendConversationId) return
+            
+            const isCurrentInvalid = !currentConversation.value ||
+              !currentConversation.value.saved ||
+              String(currentConversation.value.id || '').startsWith('temp_') ||
+              String(currentConversation.value.id || '') !== backendConversationId
+            
+            if (!isCurrentInvalid) return
+            
+            const titleFromCurrent = String(currentConversation.value?.title || '').trim() || '新对话'
+            const syncedConversation = {
+              id: backendConversationId,
+              title: titleFromCurrent,
+              createdAt: currentConversation.value?.createdAt || new Date(),
+              updatedAt: new Date(),
+              saved: true,
+              persistenceStatus: 'active'
+            }
+            const currentId = String(currentConversation.value?.id || '')
+            const currentIndex = conversations.value.findIndex(c => String(c.id || '') === currentId)
+            if (currentIndex > -1) {
+              conversations.value[currentIndex] = syncedConversation
+            } else {
+              const existingIndex = conversations.value.findIndex(c => String(c.id || '') === backendConversationId)
+              if (existingIndex > -1) {
+                conversations.value[existingIndex] = {
+                  ...conversations.value[existingIndex],
+                  ...syncedConversation
+                }
+              } else {
+                conversations.value.unshift(syncedConversation)
+              }
+            }
+            currentConversation.value = syncedConversation
+            hasUnsavedConversation.value = false
+          }
 
           const finalizeStreamingMessage = (finalContent = null) => {
             if (!streamingMessage) {
@@ -387,8 +435,11 @@ export const useChatStore = defineStore('chat', () => {
             streamingMessage = null
           }
           
+          if (data && data.session_id) {
+            syncConversationFromStream(data.session_id)
+          }
+
           if (data.type === 'start') {
-            // 开始处理聊天请求
             console.log('开始处理聊天请求:', data.message)
           } else if (data.type === 'token') {
             // 实时追加token内容(包括空格和换行符)
@@ -602,10 +653,13 @@ export const useChatStore = defineStore('chat', () => {
       // 如果流式失败，尝试普通API
       try {
         const authStore = useAuthStore()
+        const fallbackConversationId = currentConversation.value?.saved ? currentConversation.value.id : null
         const chatData = {
           content: content,
-          conversation_id: currentConversation.value.id,
           user_id: authStore.user?.id || 'default_user'
+        }
+        if (fallbackConversationId) {
+          chatData.conversation_id = fallbackConversationId
         }
         
         const response = await apiSendMessage(chatData)
@@ -690,7 +744,8 @@ export const useChatStore = defineStore('chat', () => {
             title: conv.title || '新对话',
             createdAt: new Date(conv.created_at || Date.now()),
             updatedAt: new Date(conv.updated_at || Date.now()),
-            saved: true // 从后端加载的对话都是已保存的
+            saved: true, // 从后端加载的对话都是已保存的
+            persistenceStatus: 'active'
           }))
           
           console.log('成功加载对话列表:', conversations.value)

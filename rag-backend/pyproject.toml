@@ -39,6 +39,7 @@ dependencies = [
     "crawl4ai>=0.7.4",
     "redis>=5.0.0",
     "pytz>=2024.1",
+    "sqlalchemy>=2.0.36",
 ]
 
 [tool.uv]
@@ -52,4 +53,25 @@ extra-index-url = [
 dev = [
     "pytest>=8.4.2",
     "pytest-mock>=3.15.0",
+    "ruff>=0.6.9",
+    "mypy>=1.11.2",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+exclude = ["backend/rag/storage/volumes", "backend/rag/outputs", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+check_untyped_defs = true
+explicit_package_bases = true
+exclude = "(backend/rag/storage/volumes|backend/rag/outputs|.venv)"
