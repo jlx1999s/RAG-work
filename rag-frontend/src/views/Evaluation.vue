@@ -27,6 +27,11 @@ const retrievalMode = ref('vector_only')
 const maxDocs = ref(3)
 const workspace = ref('eval_ws')
 const collectionId = ref('')
+const runTag = ref('')
+const enableRagas = ref(true)
+const includeItemDetails = ref(true)
+const cacheEnabled = ref(false)
+const cacheNamespace = ref('eval-default')
 const libraries = ref([])
 const datasets = ref([])
 const selectedDataset = ref('sample')
@@ -64,15 +69,18 @@ const formatScore = (value) => {
 }
 
 const metricValue = (key) => {
-  return result.value?.summary?.[key]
+  return result.value?.run?.quality_summary?.[key] ?? result.value?.summary?.[key]
 }
 
 const getHistorySummaryValue = (item, key) => {
-  if (!item || !item.result || !item.result.summary) return null
-  return item.result.summary[key]
+  return item?.result?.run?.quality_summary?.[key] ?? item?.result?.summary?.[key] ?? null
 }
 
 const getHistoryTotal = (item) => {
+  const runTotal = item?.result?.run?.dataset?.used_rows
+  if (runTotal !== undefined && runTotal !== null) {
+    return runTotal
+  }
   if (item && item.result && item.result.total !== undefined && item.result.total !== null) {
     return item.result.total
   }
@@ -83,6 +91,10 @@ const getHistoryTotal = (item) => {
 }
 
 const getHistoryElapsed = (item) => {
+  const elapsed = item?.result?.run?.performance_summary?.run_elapsed_ms
+  if (elapsed !== undefined && elapsed !== null) {
+    return elapsed
+  }
   if (item && item.result && item.result.elapsed_ms !== undefined && item.result.elapsed_ms !== null) {
     return item.result.elapsed_ms
   }
@@ -93,6 +105,39 @@ const getItemMetricValue = (item, key) => {
   if (!item || !item.metrics) return null
   return item.metrics[key]
 }
+
+const resultTotal = computed(() => {
+  return result.value?.run?.dataset?.used_rows ?? result.value?.total ?? 0
+})
+
+const resultElapsedMs = computed(() => {
+  return result.value?.run?.performance_summary?.run_elapsed_ms ?? result.value?.elapsed_ms ?? 0
+})
+
+const resultPerformance = computed(() => {
+  return result.value?.run?.performance_summary ?? result.value?.performance_summary ?? null
+})
+
+const resultRetrieval = computed(() => {
+  return result.value?.run?.retrieval_summary ?? result.value?.retrieval_summary ?? null
+})
+
+const resultStability = computed(() => {
+  return result.value?.run?.stability_summary ?? result.value?.stability_summary ?? null
+})
+
+const resultCost = computed(() => {
+  return result.value?.run?.cost_summary ?? result.value?.cost_summary ?? null
+})
+
+const resultCache = computed(() => {
+  return result.value?.run?.cache_summary ?? result.value?.cache_summary ?? null
+})
+
+const sourceEntries = computed(() => {
+  const distribution = resultRetrieval.value?.source_distribution || {}
+  return Object.entries(distribution)
+})
 
 const sampleLines = computed(() => {
   return sampleDataset.split('\n').filter((line) => line.trim()).length
@@ -140,6 +185,20 @@ const formatHistoryTime = (value) => {
     hour: '2-digit',
     minute: '2-digit'
   })
+}
+
+const formatNumber = (value, digits = 2) => {
+  if (value === null || value === undefined) return '--'
+  const num = Number(value)
+  if (Number.isNaN(num)) return '--'
+  return num.toFixed(digits)
+}
+
+const formatPercent = (value) => {
+  if (value === null || value === undefined) return '--'
+  const num = Number(value)
+  if (Number.isNaN(num)) return '--'
+  return `${(num * 100).toFixed(1)}%`
 }
 
 const goBack = () => {
@@ -299,6 +358,11 @@ const runEvaluation = async () => {
       retrieval_mode: retrievalMode.value,
       max_retrieval_docs: Number(maxDocs.value) || 3,
       collection_id: collectionId.value || null,
+      run_tag: runTag.value.trim() || null,
+      enable_ragas: Boolean(enableRagas.value),
+      include_item_details: Boolean(includeItemDetails.value),
+      cache_enabled: Boolean(cacheEnabled.value),
+      cache_namespace: cacheNamespace.value.trim() || null,
       dataset_name:
         selectedDataset.value !== 'sample'
           ? selectedDataset.value
@@ -457,6 +521,28 @@ onUnmounted(() => {
                 用于隔离评测运行的存储空间，与评测数据集无关
               </div>
             </div>
+            <div>
+              <label class="text-xs font-medium text-gray-500">运行标签</label>
+              <input v-model="runTag" type="text" class="input mt-2" placeholder="例如：med-v2-baseline" />
+            </div>
+            <div>
+              <label class="text-xs font-medium text-gray-500">缓存命名空间</label>
+              <input v-model="cacheNamespace" type="text" class="input mt-2" placeholder="例如：eval-default" />
+            </div>
+            <div class="md:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-3">
+              <label class="flex items-center gap-2 text-xs text-gray-600">
+                <input v-model="enableRagas" type="checkbox" class="h-4 w-4" />
+                <span>启用 RAGAS 指标</span>
+              </label>
+              <label class="flex items-center gap-2 text-xs text-gray-600">
+                <input v-model="includeItemDetails" type="checkbox" class="h-4 w-4" />
+                <span>返回样本详情</span>
+              </label>
+              <label class="flex items-center gap-2 text-xs text-gray-600">
+                <input v-model="cacheEnabled" type="checkbox" class="h-4 w-4" />
+                <span>启用缓存标记</span>
+              </label>
+            </div>
           </div>
 
           <div>
@@ -532,7 +618,7 @@ onUnmounted(() => {
           <div class="flex items-center justify-between">
             <h2 class="text-lg font-semibold text-gray-900">评测结果</h2>
             <div class="text-xs text-gray-500" v-if="result">
-              共 {{ result.total || 0 }} 条，用时 {{ result.elapsed_ms || 0 }} ms
+              共 {{ resultTotal }} 条，用时 {{ resultElapsedMs }} ms
             </div>
           </div>
 
@@ -556,6 +642,53 @@ onUnmounted(() => {
             </div>
           </div>
 
+          <div v-if="resultPerformance || resultRetrieval || resultStability || resultCost || resultCache" class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+            <div class="rounded-xl border border-gray-100 bg-slate-50 p-3 space-y-2">
+              <div class="text-gray-500">性能</div>
+              <div class="grid grid-cols-2 gap-2 text-gray-700">
+                <div>平均延迟 {{ formatNumber(resultPerformance?.avg_latency_ms) }} ms</div>
+                <div>P95 {{ formatNumber(resultPerformance?.p95_latency_ms) }} ms</div>
+                <div>P99 {{ formatNumber(resultPerformance?.p99_latency_ms) }} ms</div>
+                <div>吞吐 {{ formatNumber(resultPerformance?.throughput_qps, 3) }} qps</div>
+              </div>
+            </div>
+            <div class="rounded-xl border border-gray-100 bg-slate-50 p-3 space-y-2">
+              <div class="text-gray-500">检索</div>
+              <div class="grid grid-cols-2 gap-2 text-gray-700">
+                <div>平均上下文 {{ formatNumber(resultRetrieval?.avg_contexts_per_item) }}</div>
+                <div>上下文覆盖 {{ formatPercent(resultRetrieval?.context_presence_rate) }}</div>
+                <div>P95上下文 {{ formatNumber(resultRetrieval?.p95_contexts_per_item) }}</div>
+                <div>平均上下文字数 {{ formatNumber(resultRetrieval?.avg_context_chars_per_item) }}</div>
+              </div>
+              <div class="flex flex-wrap gap-2 text-[11px] text-gray-600">
+                <span v-for="[sourceName, count] in sourceEntries" :key="sourceName" class="px-2 py-0.5 rounded-full bg-white border border-gray-200">
+                  {{ sourceName }} {{ count }}
+                </span>
+              </div>
+            </div>
+            <div class="rounded-xl border border-gray-100 bg-slate-50 p-3 space-y-2">
+              <div class="text-gray-500">稳定性</div>
+              <div class="grid grid-cols-2 gap-2 text-gray-700">
+                <div>失败数 {{ resultStability?.failed_items ?? '--' }}</div>
+                <div>错误率 {{ formatPercent(resultStability?.error_rate) }}</div>
+                <div>空回答 {{ resultStability?.empty_answer_count ?? '--' }}</div>
+                <div>空回答率 {{ formatPercent(resultStability?.empty_answer_rate) }}</div>
+              </div>
+            </div>
+            <div class="rounded-xl border border-gray-100 bg-slate-50 p-3 space-y-2">
+              <div class="text-gray-500">成本与缓存</div>
+              <div class="grid grid-cols-2 gap-2 text-gray-700">
+                <div>上下文总字数 {{ resultCost?.estimated?.total_context_chars ?? '--' }}</div>
+                <div>回答总字数 {{ resultCost?.estimated?.total_answer_chars ?? '--' }}</div>
+                <div>平均回答字数 {{ formatNumber(resultCost?.estimated?.avg_answer_chars_per_item) }}</div>
+                <div>缓存开关 {{ resultCache?.enabled ? '开启' : '关闭' }}</div>
+              </div>
+              <div class="text-[11px] text-gray-500">
+                命名空间 {{ resultCache?.namespace || '--' }}
+              </div>
+            </div>
+          </div>
+
           <div class="space-y-3">
             <h3 class="text-sm font-semibold text-gray-900">详细样本</h3>
             <div v-if="!result" class="text-sm text-gray-500">
@@ -573,7 +706,7 @@ onUnmounted(() => {
                     <div class="text-sm text-gray-900">{{ item.question }}</div>
                   </div>
                   <div class="text-xs text-gray-500 shrink-0">
-                    上下文 {{ item.contexts_count || 0 }}
+                    上下文 {{ item.contexts_count || 0 }} · 延迟 {{ item.latency_ms ?? '--' }} ms
                   </div>
                 </div>
                 <div class="grid gap-3">
