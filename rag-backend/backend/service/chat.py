@@ -96,20 +96,32 @@ def _build_node_trace(node_name: str, node_output: Dict[str, Any], step_index: i
         trace["summary"] = "工具执行完成"
         return trace
     if node_name == "check_retrieval_needed":
+        decision_stats = node_output.get("retrieval_decision_stats") or {}
         trace["decision"] = {
             "need_retrieval": bool(node_output.get("need_retrieval")),
             "reason": node_output.get("need_retrieval_reason"),
-            "original_question": node_output.get("original_question")
+            "original_question": node_output.get("original_question"),
+            "stats": decision_stats
         }
-        trace["summary"] = f"检索判断: need_retrieval={trace['decision']['need_retrieval']}"
+        stage = decision_stats.get("stage")
+        if stage:
+            trace["summary"] = f"检索判断: need_retrieval={trace['decision']['need_retrieval']}（{stage}）"
+        else:
+            trace["summary"] = f"检索判断: need_retrieval={trace['decision']['need_retrieval']}"
         return trace
     if node_name == "expand_subquestions":
         subquestions = node_output.get("subquestions") or []
+        expansion_stats = node_output.get("subquestion_expansion_stats") or {}
         trace["output"] = {
             "subquestions": subquestions,
-            "count": len(subquestions)
+            "count": len(subquestions),
+            "stats": expansion_stats
         }
-        trace["summary"] = f"子问题扩展: {len(subquestions)} 条"
+        triggered = expansion_stats.get("triggered")
+        if triggered:
+            trace["summary"] = f"子问题扩展: {len(subquestions)} 条"
+        else:
+            trace["summary"] = "子问题扩展: 未触发"
         return trace
     if node_name == "classify_question_type":
         trace["decision"] = {
@@ -120,28 +132,45 @@ def _build_node_trace(node_name: str, node_output: Dict[str, Any], step_index: i
         return trace
     if node_name == "vector_db_retrieval":
         docs = node_output.get("vector_db_results") or []
-        trace["output"] = {
-            "docs_count": len(docs),
-            "docs_preview": _serialize_docs(docs)
-        }
-        trace["summary"] = f"向量检索返回 {len(docs)} 条"
-        return trace
-    if node_name == "graph_db_retrieval":
-        docs = node_output.get("graph_db_results") or []
-        trace["output"] = {
-            "docs_count": len(docs),
-            "docs_preview": _serialize_docs(docs)
-        }
-        trace["summary"] = f"图检索返回 {len(docs)} 条"
-        return trace
-    if node_name == "hybrid_retrieval":
-        docs = node_output.get("retrieved_docs") or []
+        retrieval_stats = node_output.get("vector_retrieval_stats") or {}
         trace["output"] = {
             "docs_count": len(docs),
             "docs_preview": _serialize_docs(docs),
-            "fusion_stats": node_output.get("retrieval_fusion_stats") or {}
+            "stats": retrieval_stats
         }
-        trace["summary"] = f"融合检索返回 {len(docs)} 条"
+        cache_hit = retrieval_stats.get("cache_hit")
+        hit_text = "缓存命中" if cache_hit else "未命中缓存"
+        trace["summary"] = f"向量检索返回 {len(docs)} 条（{hit_text}）"
+        return trace
+    if node_name == "graph_db_retrieval":
+        docs = node_output.get("graph_db_results") or []
+        retrieval_stats = node_output.get("graph_retrieval_stats") or {}
+        trace["output"] = {
+            "docs_count": len(docs),
+            "docs_preview": _serialize_docs(docs),
+            "stats": retrieval_stats
+        }
+        cache_hit = retrieval_stats.get("cache_hit")
+        timed_out = retrieval_stats.get("timed_out")
+        if timed_out:
+            status_text = "超时降级"
+        else:
+            status_text = "缓存命中" if cache_hit else "未命中缓存"
+        trace["summary"] = f"图检索返回 {len(docs)} 条（{status_text}）"
+        return trace
+    if node_name == "hybrid_retrieval":
+        docs = node_output.get("retrieved_docs") or []
+        fusion_stats = node_output.get("retrieval_fusion_stats") or {}
+        trace["output"] = {
+            "docs_count": len(docs),
+            "docs_preview": _serialize_docs(docs),
+            "fusion_stats": fusion_stats,
+            "vector_stats": node_output.get("vector_retrieval_stats") or {},
+            "graph_stats": node_output.get("graph_retrieval_stats") or {}
+        }
+        graph_skipped = fusion_stats.get("graph_skipped")
+        graph_text = "跳过图检索" if graph_skipped else "执行双路径"
+        trace["summary"] = f"融合检索返回 {len(docs)} 条（{graph_text}）"
         return trace
     if node_name in {"generate_answer", "direct_answer"}:
         messages = node_output.get("messages") or []

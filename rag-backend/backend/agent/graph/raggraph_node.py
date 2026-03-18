@@ -23,14 +23,18 @@ from backend.agent.tools.exceptions import (
 )
 from backend.agent.tools.audit import get_audit_logger
 import asyncio
+import copy
+import hashlib
 import json
 import os
 import time
 import math
 import re
+import redis as redis_sync
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from urllib.parse import urlparse, unquote
 from backend.config.oss import get_presigned_url_for_download
+from backend.config.redis import get_redis_client
 
 class RAGNodes:
     """RAG图节点实现类
@@ -65,7 +69,89 @@ class RAGNodes:
         self.vector_source_weight = float(os.getenv("RAG_VECTOR_SOURCE_WEIGHT", "1.0"))
         self.mmr_lambda = float(os.getenv("RAG_MMR_LAMBDA", "0.75"))
         self.enable_semantic_rerank = os.getenv("RAG_ENABLE_SEMANTIC_RERANK", "true").lower() in {"true", "1", "yes", "on"}
+        self.semantic_rerank_max_inputs = int(os.getenv("RAG_SEMANTIC_RERANK_MAX_INPUTS", "10"))
+        self.semantic_rerank_total_count = 0
+        self.semantic_rerank_fallback_count = 0
+        self.semantic_rerank_metrics_enabled = os.getenv("RAG_SEMANTIC_RERANK_METRICS_ENABLED", "true").lower() in {"true", "1", "yes", "on"}
+        self.metrics_redis_prefix = os.getenv("RAG_METRICS_REDIS_PREFIX", "rag:metrics")
+        self.retrieval_cache_enabled = os.getenv("RAG_RETRIEVAL_CACHE_ENABLED", "true").lower() in {"true", "1", "yes", "on"}
+        self.retrieval_cache_ttl_seconds = float(os.getenv("RAG_RETRIEVAL_CACHE_TTL_SECONDS", "300"))
+        self.retrieval_cache_max_entries = int(os.getenv("RAG_RETRIEVAL_CACHE_MAX_ENTRIES", "512"))
+        self.redis_retrieval_cache_enabled = os.getenv("RAG_REDIS_RETRIEVAL_CACHE_ENABLED", "true").lower() in {"true", "1", "yes", "on"}
+        self.redis_retrieval_cache_prefix = os.getenv("RAG_REDIS_RETRIEVAL_CACHE_PREFIX", "rag:retrieval")
+        self.graph_query_timeout_seconds = float(os.getenv("RAG_GRAPH_QUERY_TIMEOUT_SECONDS", "2.5"))
+        self.enable_conditional_graph = os.getenv("RAG_ENABLE_CONDITIONAL_GRAPH", "true").lower() in {"true", "1", "yes", "on"}
+        self.conditional_graph_min_vector_docs = int(os.getenv("RAG_CONDITIONAL_GRAPH_MIN_VECTOR_DOCS", "3"))
+        self.conditional_graph_confidence_threshold = float(os.getenv("RAG_CONDITIONAL_GRAPH_CONFIDENCE_THRESHOLD", "0.22"))
+        self.graph_latency_target_ms = float(os.getenv("RAG_GRAPH_LATENCY_TARGET_MS", "600"))
+        self.graph_budget_min_docs = int(os.getenv("RAG_GRAPH_BUDGET_MIN_DOCS", "1"))
+        self.graph_budget_max_docs = int(os.getenv("RAG_GRAPH_BUDGET_MAX_DOCS", "8"))
+        self.graph_circuit_breaker_enabled = os.getenv("RAG_GRAPH_CIRCUIT_BREAKER_ENABLED", "true").lower() in {"true", "1", "yes", "on"}
+        self.graph_circuit_fail_threshold = int(os.getenv("RAG_GRAPH_CIRCUIT_FAIL_THRESHOLD", "3"))
+        self.graph_circuit_cooldown_seconds = float(os.getenv("RAG_GRAPH_CIRCUIT_COOLDOWN_SECONDS", "30"))
+        self.graph_circuit_opened_until = 0.0
+        self.graph_consecutive_failures = 0
+        self.graph_latency_ema_ms = 0.0
+        self.graph_latency_ema_alpha = float(os.getenv("RAG_GRAPH_LATENCY_EMA_ALPHA", "0.25"))
+        self._vector_retrieval_cache = {}
+        self._graph_retrieval_cache = {}
+        self._sync_redis_client = None
+        self.retrieval_cache_scope = str(getattr(self.lightrag_storage, "workspace", "") or "default")
+        self.chunk_role_weights = {
+            "contraindication": float(os.getenv("RAG_ROLE_WEIGHT_CONTRAINDICATION", "1.25")),
+            "dosage": float(os.getenv("RAG_ROLE_WEIGHT_DOSAGE", "1.18")),
+            "recommendation": float(os.getenv("RAG_ROLE_WEIGHT_RECOMMENDATION", "1.12")),
+            "adverse_reaction": float(os.getenv("RAG_ROLE_WEIGHT_ADVERSE_REACTION", "1.08")),
+            "indication": float(os.getenv("RAG_ROLE_WEIGHT_INDICATION", "1.05")),
+            "general_medical": float(os.getenv("RAG_ROLE_WEIGHT_GENERAL", "1.0"))
+        }
+        self.key_clause_bonus = float(os.getenv("RAG_KEY_CLAUSE_BONUS", "0.015"))
+        self.evidence_level_bonus = float(os.getenv("RAG_EVIDENCE_LEVEL_BONUS", "0.012"))
         self.assessment_skill_name = "health_risk_assessment"
+        self.enable_subquestion_expansion = os.getenv("RAG_ENABLE_SUBQUESTION_EXPANSION", "true").lower() in {"true", "1", "yes", "on"}
+        self.subquestion_max_count = int(os.getenv("RAG_SUBQUESTION_MAX_COUNT", "3"))
+        self.subquestion_trigger_min_chars = int(os.getenv("RAG_SUBQUESTION_TRIGGER_MIN_CHARS", "20"))
+        self.subquestion_complexity_min_score = float(os.getenv("RAG_SUBQUESTION_COMPLEXITY_MIN_SCORE", "2.0"))
+        self.subquestion_intent_weight = float(os.getenv("RAG_SUBQUESTION_INTENT_WEIGHT", "1.0"))
+        self.subquestion_coordination_weight = float(os.getenv("RAG_SUBQUESTION_COORDINATION_WEIGHT", "1.0"))
+        self.subquestion_constraint_weight = float(os.getenv("RAG_SUBQUESTION_CONSTRAINT_WEIGHT", "1.0"))
+        self.subquestion_intent_markers = self._parse_env_list(
+            os.getenv("RAG_SUBQUESTION_INTENT_MARKERS"),
+            ["什么", "哪些", "如何", "怎么", "多少", "是否", "能否", "为什么", "哪种", "区别", "对比", "步骤", "流程", "建议", "注意事项"]
+        )
+        self.subquestion_coordination_markers = self._parse_env_list(
+            os.getenv("RAG_SUBQUESTION_COORDINATION_MARKERS"),
+            ["以及", "并且", "同时", "分别", "和", "与", "并", "及"]
+        )
+        self.subquestion_constraint_patterns = self._parse_env_list(
+            os.getenv("RAG_SUBQUESTION_CONSTRAINT_PATTERNS"),
+            ["[0-9]{4}年", "近[一二三四五六七八九十0-9]+年", "儿童|孕妇|老年人|肝肾功能", "轻度|中度|重度", "空腹|饭前|饭后", "阶段|分期|级别", "禁忌|适应症|并发症|风险因素"]
+        )
+        self.retrieval_rule_force_yes_patterns = self._parse_env_list(
+            os.getenv("RAG_RETRIEVAL_RULE_FORCE_YES_PATTERNS"),
+            ["联系方式", "根据.*文档", "出处", "来源", "数据", "统计", "最新", "指南", "药物", "治疗", "副作用", "禁忌", "诊断", "检索", "知识库"]
+        )
+        self.retrieval_rule_force_no_patterns = self._parse_env_list(
+            os.getenv("RAG_RETRIEVAL_RULE_FORCE_NO_PATTERNS"),
+            ["^\\s*(你好|您好|hello|hi)\\s*$", "^\\s*(谢谢|感谢|再见|bye)\\s*$", "^\\s*你是谁\\s*[?？]?$", "^\\s*你能做什么\\s*[?？]?$"]
+        )
+        self.retrieval_classifier_yes_keywords = self._parse_env_list(
+            os.getenv("RAG_RETRIEVAL_CLASSIFIER_YES_KEYWORDS"),
+            ["谁", "何时", "哪里", "多少", "文档", "资料", "来源", "联系方式", "政策", "标准", "疾病", "药", "手术", "并发症", "指标", "数据库"]
+        )
+        self.retrieval_classifier_no_keywords = self._parse_env_list(
+            os.getenv("RAG_RETRIEVAL_CLASSIFIER_NO_KEYWORDS"),
+            ["写一首", "写一段", "脑暴", "创意", "段子", "翻译", "改写", "润色", "总结这段话", "数学题", "计算"]
+        )
+        self.retrieval_classifier_yes_threshold = float(os.getenv("RAG_RETRIEVAL_CLASSIFIER_YES_THRESHOLD", "2.0"))
+        self.retrieval_classifier_margin = float(os.getenv("RAG_RETRIEVAL_CLASSIFIER_MARGIN", "1.0"))
+        self.rule_library_version = os.getenv("RAG_RULE_LIBRARY_VERSION", "v1")
+        self.rule_library_redis_enabled = os.getenv("RAG_RULE_LIBRARY_REDIS_ENABLED", "true").lower() in {"true", "1", "yes", "on"}
+        self.rule_library_redis_prefix = os.getenv("RAG_RULE_LIBRARY_REDIS_PREFIX", "rag:rule_library")
+        self.rule_library_cache_ttl_seconds = float(os.getenv("RAG_RULE_LIBRARY_CACHE_TTL_SECONDS", "60"))
+        self.rule_library_env_json = os.getenv("RAG_RULE_LIBRARY_JSON", "")
+        self._rule_library_cache = {"expires_at": 0.0, "payload": None}
+        self.collection_policy_overrides = self._load_collection_policy_overrides(os.getenv("RAG_COLLECTION_POLICY_OVERRIDES", ""))
         self.tool_map = {tool.name: tool for tool in self.tools}
         self.assessment_profiles = {
             "hypertension_risk_assessment": {
@@ -79,6 +165,518 @@ class RAGNodes:
                 "trigger_keywords": ["糖尿病", "血糖", "bmi", "体重指数"]
             }
         }
+
+    def _parse_env_list(self, value: str | None, default: list[str]) -> list[str]:
+        if value is None:
+            return list(default)
+        raw = str(value).strip()
+        if not raw:
+            return list(default)
+        if raw.startswith("["):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    return [str(item).strip() for item in parsed if str(item).strip()]
+            except Exception:
+                pass
+        return [part.strip() for part in raw.split(",") if part.strip()]
+
+    def _load_collection_policy_overrides(self, raw_text: str) -> dict:
+        if not raw_text:
+            return {}
+        try:
+            payload = json.loads(raw_text)
+            if not isinstance(payload, dict):
+                return {}
+            normalized = {}
+            for key, value in payload.items():
+                if isinstance(value, dict):
+                    normalized[str(key)] = value
+            return normalized
+        except Exception as exc:
+            self.logger.warning(f"解析RAG_COLLECTION_POLICY_OVERRIDES失败: {exc}")
+            return {}
+
+    def _policy_value(self, key: str, default):
+        collection_overrides = self.collection_policy_overrides.get(self.retrieval_cache_scope, {})
+        if key not in collection_overrides:
+            return default
+        return collection_overrides.get(key)
+
+    def _policy_bool(self, key: str, default: bool) -> bool:
+        value = self._policy_value(key, default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.lower() in {"true", "1", "yes", "on"}
+        return bool(value)
+
+    def _policy_int(self, key: str, default: int) -> int:
+        value = self._policy_value(key, default)
+        try:
+            return int(value)
+        except Exception:
+            return int(default)
+
+    def _policy_float(self, key: str, default: float) -> float:
+        value = self._policy_value(key, default)
+        try:
+            return float(value)
+        except Exception:
+            return float(default)
+
+    def _policy_list(self, key: str, default: list[str]) -> list[str]:
+        value = self._policy_value(key, default)
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str):
+            return self._parse_env_list(value, default)
+        return list(default)
+
+    def _safe_int(self, value, default: int) -> int:
+        try:
+            return int(value)
+        except Exception:
+            return int(default)
+
+    def _safe_float(self, value, default: float) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return float(default)
+
+    def _safe_bool(self, value, default: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.lower() in {"true", "1", "yes", "on"}
+        if value is None:
+            return default
+        return bool(value)
+
+    def _build_default_rule_library(self) -> dict:
+        retrieval_rules = []
+        for idx, pattern in enumerate(self.retrieval_rule_force_yes_patterns):
+            retrieval_rules.append(
+                {
+                    "id": f"retrieval.force_yes.{idx + 1}",
+                    "version": self.rule_library_version,
+                    "scope": "global",
+                    "stage": "retrieval",
+                    "priority": 100 + idx,
+                    "enabled": True,
+                    "type": "regex",
+                    "match": pattern,
+                    "decision": True
+                }
+            )
+        for idx, pattern in enumerate(self.retrieval_rule_force_no_patterns):
+            retrieval_rules.append(
+                {
+                    "id": f"retrieval.force_no.{idx + 1}",
+                    "version": self.rule_library_version,
+                    "scope": "global",
+                    "stage": "retrieval",
+                    "priority": 200 + idx,
+                    "enabled": True,
+                    "type": "regex",
+                    "match": pattern,
+                    "decision": False
+                }
+            )
+        retrieval_rules.append(
+            {
+                "id": "retrieval.force_no.math_expression",
+                "version": self.rule_library_version,
+                "scope": "global",
+                "stage": "retrieval",
+                "priority": 300,
+                "enabled": True,
+                "type": "math_expression",
+                "decision": False
+            }
+        )
+        return {
+            "meta": {
+                "version": self.rule_library_version,
+                "source": "default"
+            },
+            "retrieval_rules": retrieval_rules,
+            "subquestion_policy": {
+                "id": "subquestion.default",
+                "version": self.rule_library_version,
+                "scope": "global",
+                "complexity_min_score": self.subquestion_complexity_min_score,
+                "intent_weight": self.subquestion_intent_weight,
+                "coordination_weight": self.subquestion_coordination_weight,
+                "constraint_weight": self.subquestion_constraint_weight,
+                "trigger_min_chars": self.subquestion_trigger_min_chars,
+                "max_count": self.subquestion_max_count
+            }
+        }
+
+    def _normalize_rule_item(self, item: dict, fallback_scope: str) -> dict | None:
+        if not isinstance(item, dict):
+            return None
+        rule_id = str(item.get("id", "")).strip()
+        if not rule_id:
+            return None
+        stage = str(item.get("stage", "retrieval")).strip() or "retrieval"
+        rule_type = str(item.get("type", "regex")).strip() or "regex"
+        normalized = {
+            "id": rule_id,
+            "version": str(item.get("version", self.rule_library_version)).strip() or self.rule_library_version,
+            "scope": str(item.get("scope", fallback_scope)).strip() or fallback_scope,
+            "stage": stage,
+            "priority": self._safe_int(item.get("priority", 999), 999),
+            "enabled": self._safe_bool(item.get("enabled", True), True),
+            "type": rule_type,
+            "rollout_percent": self._safe_float(item.get("rollout_percent", 100.0), 100.0),
+            "effective_from": self._safe_int(item.get("effective_from", 0), 0),
+            "effective_to": self._safe_int(item.get("effective_to", 0), 0)
+        }
+        if "match" in item:
+            normalized["match"] = str(item.get("match", ""))
+        if "decision" in item:
+            normalized["decision"] = bool(item.get("decision"))
+        return normalized
+
+    def _normalize_subquestion_policy(self, payload: dict, fallback_scope: str) -> dict:
+        if not isinstance(payload, dict):
+            payload = {}
+        return {
+            "id": str(payload.get("id", "subquestion.default")).strip() or "subquestion.default",
+            "version": str(payload.get("version", self.rule_library_version)).strip() or self.rule_library_version,
+            "scope": str(payload.get("scope", fallback_scope)).strip() or fallback_scope,
+            "complexity_min_score": float(payload.get("complexity_min_score", self.subquestion_complexity_min_score)),
+            "intent_weight": float(payload.get("intent_weight", self.subquestion_intent_weight)),
+            "coordination_weight": float(payload.get("coordination_weight", self.subquestion_coordination_weight)),
+            "constraint_weight": float(payload.get("constraint_weight", self.subquestion_constraint_weight)),
+            "trigger_min_chars": self._safe_int(payload.get("trigger_min_chars", self.subquestion_trigger_min_chars), self.subquestion_trigger_min_chars),
+            "max_count": self._safe_int(payload.get("max_count", self.subquestion_max_count), self.subquestion_max_count)
+        }
+
+    def _merge_rule_library(self, base_payload: dict, override_payload: dict, source_name: str) -> dict:
+        merged = copy.deepcopy(base_payload) if isinstance(base_payload, dict) else self._build_default_rule_library()
+        if not isinstance(override_payload, dict):
+            return merged
+        if isinstance(override_payload.get("meta"), dict):
+            merged["meta"] = {**(merged.get("meta", {})), **override_payload.get("meta", {})}
+            merged["meta"]["source"] = source_name
+        incoming_rules = override_payload.get("retrieval_rules")
+        if isinstance(incoming_rules, list):
+            current_rules = {
+                rule.get("id"): rule
+                for rule in merged.get("retrieval_rules", [])
+                if isinstance(rule, dict) and rule.get("id")
+            }
+            for item in incoming_rules:
+                normalized_item = self._normalize_rule_item(item, fallback_scope="global")
+                if normalized_item is not None:
+                    current_rules[normalized_item["id"]] = normalized_item
+            merged["retrieval_rules"] = list(current_rules.values())
+        if isinstance(override_payload.get("subquestion_policy"), dict):
+            merged["subquestion_policy"] = self._normalize_subquestion_policy(
+                override_payload["subquestion_policy"],
+                fallback_scope="global"
+            )
+        if "meta" not in merged:
+            merged["meta"] = {}
+        merged["meta"]["source"] = source_name
+        return merged
+
+    def _is_rule_in_effective_window(self, rule: dict, now_ts: int) -> tuple[bool, str]:
+        start_ts = self._safe_int(rule.get("effective_from", 0), 0)
+        end_ts = self._safe_int(rule.get("effective_to", 0), 0)
+        if start_ts > 0 and now_ts < start_ts:
+            return False, "not_started"
+        if end_ts > 0 and now_ts > end_ts:
+            return False, "expired"
+        return True, ""
+
+    def _is_rule_in_rollout(self, rule: dict, query_text: str) -> tuple[bool, str]:
+        rollout_percent = self._safe_float(rule.get("rollout_percent", 100.0), 100.0)
+        rollout_percent = max(0.0, min(100.0, rollout_percent))
+        if rollout_percent >= 100.0:
+            return True, ""
+        seed = f"{rule.get('id', '')}:{query_text or ''}"
+        bucket = int(hashlib.md5(seed.encode("utf-8")).hexdigest()[:8], 16) % 100
+        if float(bucket) < rollout_percent:
+            return True, ""
+        return False, f"rollout_filtered({bucket}>={rollout_percent})"
+
+    def _audit_rule_conflicts(self, rules: list[dict]) -> list[dict]:
+        conflict_items = []
+        grouped = {}
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            if str(rule.get("stage", "")) != "retrieval":
+                continue
+            if "decision" not in rule:
+                continue
+            key = (self._safe_int(rule.get("priority", 999), 999), str(rule.get("scope", "global")))
+            grouped.setdefault(key, []).append(rule)
+        for (priority, scope), bucket in grouped.items():
+            decisions = {bool(item.get("decision")) for item in bucket}
+            if len(bucket) > 1 and len(decisions) > 1:
+                conflict_items.append(
+                    {
+                        "priority": priority,
+                        "scope": scope,
+                        "rule_ids": [str(item.get("id", "")) for item in bucket]
+                    }
+                )
+        if conflict_items:
+            self.logger.warning(f"规则库检测到优先级冲突: {conflict_items}")
+        return conflict_items
+
+    def _load_rule_library_from_redis(self) -> dict:
+        if not self.rule_library_redis_enabled:
+            return {}
+        try:
+            redis_client = self._get_sync_redis_client()
+            global_key = f"{self.rule_library_redis_prefix}:global"
+            raw_global = redis_client.get(global_key)
+            merged_payload = {}
+            if raw_global:
+                merged_payload = self._merge_rule_library(
+                    merged_payload,
+                    json.loads(raw_global),
+                    source_name="redis_global"
+                )
+            if self.retrieval_cache_scope:
+                scope_key = f"{self.rule_library_redis_prefix}:collection:{self.retrieval_cache_scope}"
+                raw_scope = redis_client.get(scope_key)
+                if raw_scope:
+                    merged_payload = self._merge_rule_library(
+                        merged_payload,
+                        json.loads(raw_scope),
+                        source_name="redis_collection"
+                    )
+            return merged_payload
+        except Exception as exc:
+            self.logger.warning(f"读取规则库Redis配置失败: {exc}")
+            return {}
+
+    def _get_rule_library(self, force_refresh: bool = False) -> dict:
+        now_ts = time.time()
+        if (not force_refresh) and self._rule_library_cache.get("payload") is not None and now_ts < float(self._rule_library_cache.get("expires_at", 0.0)):
+            return copy.deepcopy(self._rule_library_cache["payload"])
+        payload = self._build_default_rule_library()
+        if self.rule_library_env_json:
+            try:
+                env_payload = json.loads(self.rule_library_env_json)
+                payload = self._merge_rule_library(payload, env_payload, source_name="env")
+            except Exception as exc:
+                self.logger.warning(f"解析RAG_RULE_LIBRARY_JSON失败: {exc}")
+        redis_payload = self._load_rule_library_from_redis()
+        if redis_payload:
+            payload = self._merge_rule_library(payload, redis_payload, source_name="redis")
+        collection_overrides = self.collection_policy_overrides.get(self.retrieval_cache_scope, {})
+        if isinstance(collection_overrides, dict) and "rule_library" in collection_overrides:
+            payload = self._merge_rule_library(payload, collection_overrides.get("rule_library"), source_name="collection_override")
+        if not isinstance(payload.get("retrieval_rules"), list):
+            payload["retrieval_rules"] = []
+        payload["retrieval_rules"] = sorted(
+            [rule for rule in payload.get("retrieval_rules", []) if isinstance(rule, dict)],
+            key=lambda item: (self._safe_int(item.get("priority", 999), 999), str(item.get("id", "")))
+        )
+        payload["subquestion_policy"] = self._normalize_subquestion_policy(
+            payload.get("subquestion_policy", {}),
+            fallback_scope=self.retrieval_cache_scope
+        )
+        conflicts = self._audit_rule_conflicts(payload["retrieval_rules"])
+        payload["meta"] = payload.get("meta", {})
+        payload["meta"]["conflict_count"] = len(conflicts)
+        payload["meta"]["conflicts"] = conflicts
+        self._rule_library_cache = {
+            "expires_at": now_ts + max(self.rule_library_cache_ttl_seconds, 1.0),
+            "payload": copy.deepcopy(payload)
+        }
+        return payload
+
+    def _extract_latest_message(self, state: RAGGraphState) -> str:
+        messages = state.get("messages", [])
+        if not messages:
+            return ""
+        latest = messages[-1]
+        return latest.content if hasattr(latest, "content") else str(latest)
+
+    def _rule_first_retrieval_decision(self, question: str, library: dict | None = None) -> dict:
+        normalized = (question or "").strip()
+        if not normalized:
+            return {
+                "decision": False,
+                "reason": "问题为空，跳过检索",
+                "hit_rule_id": "retrieval.force_no.empty",
+                "rule_version": self.rule_library_version,
+                "rule_scope": "global",
+                "matched_pattern": "",
+                "decision_path": ["empty_question"]
+            }
+        library = library if isinstance(library, dict) else self._get_rule_library()
+        retrieval_rules = library.get("retrieval_rules", [])
+        now_ts = int(time.time())
+        decision_path = []
+        for rule in retrieval_rules:
+            if not self._safe_bool(rule.get("enabled", True), True):
+                decision_path.append(f"skip_disabled:{rule.get('id', '')}")
+                continue
+            if str(rule.get("stage", "retrieval")) != "retrieval":
+                decision_path.append(f"skip_stage:{rule.get('id', '')}")
+                continue
+            in_window, window_reason = self._is_rule_in_effective_window(rule, now_ts)
+            if not in_window:
+                decision_path.append(f"skip_window:{rule.get('id', '')}:{window_reason}")
+                continue
+            in_rollout, rollout_reason = self._is_rule_in_rollout(rule, normalized)
+            if not in_rollout:
+                decision_path.append(f"skip_rollout:{rule.get('id', '')}:{rollout_reason}")
+                continue
+            rule_type = str(rule.get("type", "regex"))
+            if rule_type == "regex":
+                pattern = str(rule.get("match", "")).strip()
+                if pattern and re.search(pattern, normalized, re.IGNORECASE):
+                    decision = bool(rule.get("decision"))
+                    reason_prefix = "强制检索" if decision else "免检索"
+                    return {
+                        "decision": decision,
+                        "reason": f"规则库命中{reason_prefix}: {pattern}",
+                        "hit_rule_id": rule.get("id"),
+                        "rule_version": rule.get("version", self.rule_library_version),
+                        "rule_scope": rule.get("scope", "global"),
+                        "matched_pattern": pattern,
+                        "decision_path": decision_path + [f"hit:{rule.get('id', '')}"]
+                    }
+                decision_path.append(f"miss:{rule.get('id', '')}")
+            elif rule_type == "math_expression":
+                if re.fullmatch(r"[0-9\.\+\-\*/\(\)\s=]+", normalized):
+                    decision = bool(rule.get("decision"))
+                    reason_prefix = "强制检索" if decision else "免检索"
+                    return {
+                        "decision": decision,
+                        "reason": f"规则库命中{reason_prefix}: 纯计算表达式",
+                        "hit_rule_id": rule.get("id"),
+                        "rule_version": rule.get("version", self.rule_library_version),
+                        "rule_scope": rule.get("scope", "global"),
+                        "matched_pattern": "math_expression",
+                        "decision_path": decision_path + [f"hit:{rule.get('id', '')}"]
+                    }
+                decision_path.append(f"miss:{rule.get('id', '')}")
+            else:
+                decision_path.append(f"skip_type:{rule.get('id', '')}:{rule_type}")
+        return {
+            "decision": None,
+            "reason": "",
+            "hit_rule_id": "",
+            "rule_version": "",
+            "rule_scope": "",
+            "matched_pattern": "",
+            "decision_path": decision_path
+        }
+
+    def _lightweight_retrieval_classifier(self, question: str) -> dict:
+        normalized = (question or "").strip()
+        yes_keywords = self._policy_list("retrieval_classifier_yes_keywords", self.retrieval_classifier_yes_keywords)
+        no_keywords = self._policy_list("retrieval_classifier_no_keywords", self.retrieval_classifier_no_keywords)
+        yes_threshold = self._policy_float("retrieval_classifier_yes_threshold", self.retrieval_classifier_yes_threshold)
+        margin_threshold = self._policy_float("retrieval_classifier_margin", self.retrieval_classifier_margin)
+        yes_hit = sum(1 for keyword in yes_keywords if keyword and keyword in normalized)
+        no_hit = sum(1 for keyword in no_keywords if keyword and keyword in normalized)
+        question_signal = sum(1 for signal in ["?", "？", "谁", "何时", "哪里", "多少", "哪", "怎么", "如何"] if signal in normalized)
+        yes_score = float(yes_hit + 0.5 * question_signal)
+        no_score = float(no_hit)
+        margin = yes_score - no_score
+        decision = None
+        reason = "轻量分类器不确定"
+        if yes_score >= yes_threshold and margin >= margin_threshold:
+            decision = True
+            reason = f"轻量分类器判定需要检索: yes_score={yes_score:.2f}, no_score={no_score:.2f}"
+        elif no_score > yes_score and (no_score - yes_score) >= margin_threshold:
+            decision = False
+            reason = f"轻量分类器判定无需检索: yes_score={yes_score:.2f}, no_score={no_score:.2f}"
+        return {
+            "decision": decision,
+            "reason": reason,
+            "yes_score": round(yes_score, 4),
+            "no_score": round(no_score, 4),
+            "margin": round(margin, 4)
+        }
+
+    def _compute_subquestion_complexity(self, question: str) -> dict:
+        normalized = (question or "").strip()
+        library = self._get_rule_library()
+        policy = library.get("subquestion_policy", {})
+        intent_markers = self._policy_list("subquestion_intent_markers", self.subquestion_intent_markers)
+        coordination_markers = self._policy_list("subquestion_coordination_markers", self.subquestion_coordination_markers)
+        constraint_patterns = self._policy_list("subquestion_constraint_patterns", self.subquestion_constraint_patterns)
+        intent_weight = self._policy_float("subquestion_intent_weight", float(policy.get("intent_weight", self.subquestion_intent_weight)))
+        coordination_weight = self._policy_float("subquestion_coordination_weight", float(policy.get("coordination_weight", self.subquestion_coordination_weight)))
+        constraint_weight = self._policy_float("subquestion_constraint_weight", float(policy.get("constraint_weight", self.subquestion_constraint_weight)))
+        complexity_min_score = self._policy_float("subquestion_complexity_min_score", float(policy.get("complexity_min_score", self.subquestion_complexity_min_score)))
+        intent_count = sum(1 for marker in intent_markers if marker and marker in normalized)
+        coordination_count = sum(normalized.count(marker) for marker in coordination_markers if marker)
+        constraint_count = 0
+        for pattern in constraint_patterns:
+            if pattern and re.search(pattern, normalized, re.IGNORECASE):
+                constraint_count += 1
+        score = intent_count * intent_weight + coordination_count * coordination_weight + constraint_count * constraint_weight
+        return {
+            "intent_count": intent_count,
+            "coordination_count": coordination_count,
+            "constraint_count": constraint_count,
+            "score": round(score, 4),
+            "min_score": round(complexity_min_score, 4),
+            "triggered": score >= complexity_min_score,
+            "policy_id": str(policy.get("id", "subquestion.default")),
+            "policy_version": str(policy.get("version", self.rule_library_version)),
+            "policy_scope": str(policy.get("scope", self.retrieval_cache_scope))
+        }
+
+    def _resolve_embedding_model_tag(self) -> str:
+        env_model = os.getenv("VECTOR_DASHSCOPE_EMBEDDING_MODEL", "").strip()
+        if env_model:
+            return env_model
+        model_name = getattr(self.embedding_model, "model", None) or getattr(self.embedding_model, "model_name", None)
+        if model_name:
+            return str(model_name)
+        return type(self.embedding_model).__name__ if self.embedding_model is not None else "unknown_embedding"
+
+    def _emit_semantic_rerank_metrics(self, rerank_stats: dict) -> dict:
+        result = {"emitted": False, "error": "", "labels": {}}
+        if not self.semantic_rerank_metrics_enabled:
+            result["error"] = "metrics_disabled"
+            return result
+        if not rerank_stats.get("attempted"):
+            result["error"] = "not_attempted"
+            return result
+        model_name = self._resolve_embedding_model_tag()
+        collection_id = self.retrieval_cache_scope
+        now_ts = int(time.time())
+        labels = {"model": model_name, "collection": collection_id}
+        result["labels"] = labels
+        try:
+            redis_client = self._get_sync_redis_client()
+            windows = [
+                ("1m", now_ts // 60),
+                ("1h", now_ts // 3600)
+            ]
+            for window_name, bucket in windows:
+                redis_key = (
+                    f"{self.metrics_redis_prefix}:semantic_rerank:"
+                    f"window={window_name}:bucket={bucket}:collection={collection_id}:model={model_name}"
+                )
+                redis_client.hincrby(redis_key, "total", 1)
+                if rerank_stats.get("fallback"):
+                    redis_client.hincrby(redis_key, "fallback", 1)
+                redis_client.expire(redis_key, 7 * 24 * 3600)
+            result["emitted"] = True
+            return result
+        except Exception as exc:
+            result["error"] = str(exc)
+            self.logger.warning(f"语义重排指标写入失败: {exc}")
+            return result
     
     def _execute_tool_with_timeout(self, tool, tool_args, timeout=None):
         """带超时控制的工具执行
@@ -128,6 +726,247 @@ class RAGNodes:
         self.logger.info("[RAG Graph] 节点: START - 开始处理")
 
         return state
+
+    def _clone_retrieved_docs(self, docs: list[RetrievedDocument]) -> list[RetrievedDocument]:
+        return [
+            RetrievedDocument(
+                page_content=doc.page_content,
+                metadata=dict(doc.metadata or {})
+            )
+            for doc in (docs or [])
+        ]
+
+    def _normalize_query_for_cache(self, query_text: str) -> str:
+        return re.sub(r"\s+", " ", (query_text or "").strip().lower())
+
+    def _build_retrieval_cache_key(self, prefix: str, query_text: str, subquestions: list[str], max_docs: int, extra: str = "") -> str:
+        normalized_query = self._normalize_query_for_cache(query_text)
+        return f"{prefix}|scope={self.retrieval_cache_scope}|q={normalized_query}|k={max_docs}|x={extra}"
+
+    def _extract_contact_candidates(self, retrieved_docs: list[RetrievedDocument]):
+        candidates = []
+        seen = set()
+        for index, doc in enumerate(retrieved_docs or [], start=1):
+            text = (doc.page_content or "").strip()
+            if not text:
+                continue
+            emails = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text)
+            raw_phones = re.findall(r"(?:\+?86[- ]?)?(?:1[3-9]\d[- ]?\d{4}[- ]?\d{4})", text)
+            phones = []
+            for raw_phone in raw_phones:
+                cleaned_phone = re.sub(r"\D", "", raw_phone)
+                if cleaned_phone.startswith("86") and len(cleaned_phone) > 11:
+                    cleaned_phone = cleaned_phone[-11:]
+                if re.fullmatch(r"1[3-9]\d{9}", cleaned_phone):
+                    phones.append(cleaned_phone)
+            if not emails and not phones:
+                continue
+            document_name = doc.metadata.get("document_name", f"文档{index}")
+            for value in phones + emails:
+                if value in seen:
+                    continue
+                seen.add(value)
+                candidates.append({
+                    "value": value,
+                    "kind": "phone" if value.isdigit() and len(value) == 11 else "email",
+                    "doc_index": index,
+                    "document_name": document_name
+                })
+        return candidates
+
+    def _repair_contact_answer_if_needed(self, question: str, answer: str, retrieved_docs: list[RetrievedDocument]) -> str:
+        normalized_answer = (answer or "").strip()
+        if "联系方式" not in (question or ""):
+            return normalized_answer
+        if not re.search(r"未.*上下文.*找到答案|未.*找到答案|无法.*给定上下文|没有找到相关信息", normalized_answer):
+            return normalized_answer
+        candidates = self._extract_contact_candidates(retrieved_docs)
+        if not candidates:
+            return normalized_answer
+        phones = [item for item in candidates if item["kind"] == "phone"]
+        emails = [item for item in candidates if item["kind"] == "email"]
+        parts = []
+        if phones:
+            parts.append("电话 " + "、".join(item["value"] for item in phones[:3]))
+        if emails:
+            parts.append("邮箱 " + "、".join(item["value"] for item in emails[:3]))
+        ref_ids = []
+        for item in candidates:
+            ref_id = item["doc_index"]
+            if ref_id not in ref_ids:
+                ref_ids.append(ref_id)
+        refs = "".join(f"[{idx}]" for idx in ref_ids[:6])
+        return f"根据检索到的上下文，联系方式为：{'；'.join(parts)}。{refs}"
+
+    def _get_cached_item(self, cache_store: dict, cache_key: str):
+        if not self.retrieval_cache_enabled:
+            return None
+        payload = cache_store.get(cache_key)
+        if not payload:
+            return None
+        expires_at, value = payload
+        if time.time() >= expires_at:
+            cache_store.pop(cache_key, None)
+            return None
+        return value
+
+    def _set_cached_item(self, cache_store: dict, cache_key: str, value) -> None:
+        if not self.retrieval_cache_enabled:
+            return
+        if len(cache_store) >= self.retrieval_cache_max_entries:
+            oldest_key = min(cache_store.keys(), key=lambda key: cache_store[key][0])
+            cache_store.pop(oldest_key, None)
+        expires_at = time.time() + self.retrieval_cache_ttl_seconds
+        cache_store[cache_key] = (expires_at, value)
+
+    def _is_graph_circuit_open(self) -> bool:
+        if not self.graph_circuit_breaker_enabled:
+            return False
+        return time.time() < self.graph_circuit_opened_until
+
+    def _record_graph_success(self, duration_ms: float) -> None:
+        self.graph_consecutive_failures = 0
+        if duration_ms > 0:
+            if self.graph_latency_ema_ms <= 0:
+                self.graph_latency_ema_ms = duration_ms
+            else:
+                alpha = min(max(self.graph_latency_ema_alpha, 0.05), 0.9)
+                self.graph_latency_ema_ms = alpha * duration_ms + (1.0 - alpha) * self.graph_latency_ema_ms
+
+    def _record_graph_failure(self) -> None:
+        if not self.graph_circuit_breaker_enabled:
+            return
+        self.graph_consecutive_failures += 1
+        if self.graph_consecutive_failures >= max(1, self.graph_circuit_fail_threshold):
+            self.graph_circuit_opened_until = time.time() + max(1.0, self.graph_circuit_cooldown_seconds)
+
+    def _resolve_graph_budget_docs(self, base_max_docs: int) -> int:
+        base = max(1, int(base_max_docs))
+        min_docs = max(1, self.graph_budget_min_docs)
+        max_docs = max(min_docs, self.graph_budget_max_docs)
+        if self.graph_latency_ema_ms <= 0:
+            return min(max(base, min_docs), max_docs)
+        if self.graph_latency_ema_ms > self.graph_latency_target_ms * 1.5:
+            target = max(min_docs, base - 1)
+        elif self.graph_latency_ema_ms < self.graph_latency_target_ms * 0.7:
+            target = min(max_docs, base + 1)
+        else:
+            target = base
+        return min(max(target, min_docs), max_docs)
+
+    def _serialize_retrieved_docs(self, docs: list[RetrievedDocument]) -> list[dict]:
+        serialized = []
+        for doc in (docs or []):
+            serialized.append({
+                "page_content": doc.page_content,
+                "metadata": dict(doc.metadata or {})
+            })
+        return serialized
+
+    def _deserialize_retrieved_docs(self, docs_payload: list[dict]) -> list[RetrievedDocument]:
+        restored = []
+        for item in (docs_payload or []):
+            restored.append(
+                RetrievedDocument(
+                    page_content=item.get("page_content", ""),
+                    metadata=dict(item.get("metadata") or {})
+                )
+            )
+        return restored
+
+    def _serialize_vector_cache_payload(self, payload) -> dict:
+        retrieved_docs, vector_docs = payload
+        return {
+            "retrieved_docs": self._serialize_retrieved_docs(retrieved_docs),
+            "vector_docs": self._serialize_retrieved_docs(vector_docs)
+        }
+
+    def _deserialize_vector_cache_payload(self, payload: dict):
+        return (
+            self._deserialize_retrieved_docs(payload.get("retrieved_docs") or []),
+            self._deserialize_retrieved_docs(payload.get("vector_docs") or [])
+        )
+
+    async def _get_redis_retrieval_cache(self, cache_key: str):
+        if not (self.retrieval_cache_enabled and self.redis_retrieval_cache_enabled):
+            return None
+        try:
+            redis_client = await get_redis_client()
+            redis_key = f"{self.redis_retrieval_cache_prefix}:{cache_key}"
+            cached_text = await redis_client.get(redis_key)
+            if not cached_text:
+                return None
+            return json.loads(cached_text)
+        except Exception as exc:
+            self.logger.warning(f"读取Redis检索缓存失败: {exc}")
+            return None
+
+    async def _set_redis_retrieval_cache(self, cache_key: str, payload: dict) -> None:
+        if not (self.retrieval_cache_enabled and self.redis_retrieval_cache_enabled):
+            return
+        try:
+            redis_client = await get_redis_client()
+            redis_key = f"{self.redis_retrieval_cache_prefix}:{cache_key}"
+            ttl_seconds = max(1, int(self.retrieval_cache_ttl_seconds))
+            await redis_client.set(redis_key, json.dumps(payload, ensure_ascii=False), ex=ttl_seconds)
+        except Exception as exc:
+            self.logger.warning(f"写入Redis检索缓存失败: {exc}")
+
+    def _get_sync_redis_client(self):
+        if self._sync_redis_client is not None:
+            return self._sync_redis_client
+        self._sync_redis_client = redis_sync.Redis(
+            host=os.getenv("REDIS_HOST", "127.0.0.1"),
+            port=int(os.getenv("REDIS_PORT", "6379")),
+            db=int(os.getenv("REDIS_DB", "0")),
+            password=os.getenv("REDIS_PASSWORD"),
+            decode_responses=True,
+            socket_connect_timeout=5,
+            socket_keepalive=True,
+            retry_on_timeout=True
+        )
+        return self._sync_redis_client
+
+    def _get_redis_retrieval_cache_sync(self, cache_key: str):
+        if not (self.retrieval_cache_enabled and self.redis_retrieval_cache_enabled):
+            return None
+        try:
+            redis_client = self._get_sync_redis_client()
+            redis_key = f"{self.redis_retrieval_cache_prefix}:{cache_key}"
+            cached_text = redis_client.get(redis_key)
+            if not cached_text:
+                return None
+            return json.loads(cached_text)
+        except Exception as exc:
+            self.logger.warning(f"同步读取Redis检索缓存失败: {exc}")
+            return None
+
+    def _set_redis_retrieval_cache_sync(self, cache_key: str, payload: dict) -> None:
+        if not (self.retrieval_cache_enabled and self.redis_retrieval_cache_enabled):
+            return
+        try:
+            redis_client = self._get_sync_redis_client()
+            redis_key = f"{self.redis_retrieval_cache_prefix}:{cache_key}"
+            ttl_seconds = max(1, int(self.retrieval_cache_ttl_seconds))
+            redis_client.set(redis_key, json.dumps(payload, ensure_ascii=False), ex=ttl_seconds)
+        except Exception as exc:
+            self.logger.warning(f"同步写入Redis检索缓存失败: {exc}")
+
+    async def _get_cached_item_async(self, cache_store: dict, cache_key: str, payload_parser):
+        local_cached = self._get_cached_item(cache_store, cache_key)
+        if local_cached is not None:
+            return local_cached
+        redis_payload = await self._get_redis_retrieval_cache(cache_key)
+        if redis_payload is None:
+            return None
+        parsed = payload_parser(redis_payload)
+        self._set_cached_item(cache_store, cache_key, parsed)
+        return parsed
+
+    async def _set_cached_item_async(self, cache_store: dict, cache_key: str, value, payload_builder) -> None:
+        self._set_cached_item(cache_store, cache_key, value)
+        payload = payload_builder(value)
+        await self._set_redis_retrieval_cache(cache_key, payload)
 
     def _extract_hypertension_slots(self, question: str) -> dict:
         slots = {}
@@ -436,6 +1275,18 @@ class RAGNodes:
         self.logger.info("[RAG Graph] 节点: CHECK_RETRIEVAL_NEEDED - 判断是否需要检索")
         
         retrieval_mode = state['retrieval_mode']
+        latest_message = self._extract_latest_message(state)
+        decision_stats = {
+            "stage": "",
+            "reason": "",
+            "rule_result": None,
+            "classifier_result": None,
+            "llm_result": None,
+            "rule_library_version": self.rule_library_version,
+            "rule_library_source": "",
+            "rule_conflict_count": 0,
+            "decision_path": []
+        }
 
 
         # 检查retrieval_mode是否为NO_RETRIEVAL
@@ -443,63 +1294,80 @@ class RAGNodes:
             self.logger.info("跳过检索")
             state["need_retrieval"] = False
             state["need_retrieval_reason"] = "用户设置为不需要检索模式"
-            # 设置原始问题
-            messages = state.get("messages", [])
-            if messages:
-                latest_message = messages[-1].content 
-                state["original_question"] = latest_message
+            state["original_question"] = latest_message
+            decision_stats["stage"] = "mode_no_retrieval"
+            decision_stats["reason"] = state["need_retrieval_reason"]
+            state["retrieval_decision_stats"] = decision_stats
             return state
 
-        # 如果不是AUTO模式，直接设置需要检索
         if retrieval_mode != RetrievalMode.AUTO:
             self.logger.info("直接设置需要检索")
             state["need_retrieval"] = True
             state["need_retrieval_reason"] = f"用户设置为{retrieval_mode}检索模式，直接进行检索"
-            # 设置原始问题
-            messages = state.get("messages", [])
-            if messages:
-                latest_message = messages[-1].content 
-                state["original_question"] = latest_message
+            state["original_question"] = latest_message
+            decision_stats["stage"] = "mode_force_retrieval"
+            decision_stats["reason"] = state["need_retrieval_reason"]
+            state["retrieval_decision_stats"] = decision_stats
             return state
 
-        # AUTO模式：调用LLM进行检索需求判断
-        self.logger.info("AUTO模式，调用LLM判断...")
+        self.logger.info("AUTO模式，规则优先+轻量分类器+LLM判定...")
         try:
-            # 获取最新消息
-            messages = state.get("messages", [])
-            latest_message = messages[-1].content if hasattr(messages[-1], 'content') else str(messages[-1])
+            rule_library = self._get_rule_library()
+            rule_library_meta = rule_library.get("meta", {})
+            decision_stats["rule_library_version"] = rule_library_meta.get("version", self.rule_library_version)
+            decision_stats["rule_library_source"] = rule_library_meta.get("source", "")
+            decision_stats["rule_conflict_count"] = self._safe_int(rule_library_meta.get("conflict_count", 0), 0)
+            rule_result = self._rule_first_retrieval_decision(latest_message, library=rule_library)
+            decision_stats["rule_result"] = rule_result
+            decision_stats["decision_path"] = list(rule_result.get("decision_path", []))
+            if rule_result.get("decision") is not None:
+                state["need_retrieval"] = bool(rule_result.get("decision"))
+                state["need_retrieval_reason"] = rule_result.get("reason", "")
+                state["original_question"] = latest_message
+                decision_stats["stage"] = "rule"
+                decision_stats["reason"] = state["need_retrieval_reason"]
+                state["retrieval_decision_stats"] = decision_stats
+                return state
 
-            # 构建提示词
+            classifier_result = self._lightweight_retrieval_classifier(latest_message)
+            decision_stats["classifier_result"] = classifier_result
+            if classifier_result.get("decision") is not None:
+                state["need_retrieval"] = bool(classifier_result.get("decision"))
+                state["need_retrieval_reason"] = classifier_result.get("reason", "")
+                state["original_question"] = latest_message
+                decision_stats["stage"] = "lightweight_classifier"
+                decision_stats["reason"] = state["need_retrieval_reason"]
+                decision_stats["decision_path"] = decision_stats["decision_path"] + ["fallback:lightweight_classifier"]
+                state["retrieval_decision_stats"] = decision_stats
+                return state
+
             prompt_template = RAGGraphPrompts.get_retrieval_need_judgment_prompt()
             prompt = prompt_template.format(question=latest_message)
-
-            # 使用结构化输出调用LLM
-            try:
-                structured_llm = self.llm.with_structured_output(RetrievalNeedDecision)
-                decision = structured_llm.invoke(prompt)
-
-                state["need_retrieval"] = decision.need_retrieval
-                self.logger.info(f"LLM判断结果: {decision.need_retrieval}")
-                state["need_retrieval_reason"] = decision.reasoning
-
-                # 更新提取的核心问题
-                if decision.extracted_question and decision.extracted_question.strip():
-                    state["original_question"] = decision.extracted_question.strip()
-                else:
-                    state["original_question"] = latest_message
-
-            except Exception as parse_error:
-                self.logger.error(f"结构化输出调用失败: {parse_error}")
-                # 解析失败时默认需要检索
-                state["need_retrieval"] = True
-                state["need_retrieval_reason"] = f"LLM结构化输出调用失败: {str(parse_error)}"
+            structured_llm = self.llm.with_structured_output(RetrievalNeedDecision)
+            decision = structured_llm.invoke(prompt)
+            state["need_retrieval"] = decision.need_retrieval
+            state["need_retrieval_reason"] = decision.reasoning
+            if decision.extracted_question and decision.extracted_question.strip():
+                state["original_question"] = decision.extracted_question.strip()
+            else:
                 state["original_question"] = latest_message
-
+            decision_stats["llm_result"] = {
+                "decision": bool(decision.need_retrieval),
+                "reason": decision.reasoning
+            }
+            decision_stats["stage"] = "llm"
+            decision_stats["reason"] = decision.reasoning
+            decision_stats["decision_path"] = decision_stats["decision_path"] + ["fallback:llm"]
+            state["retrieval_decision_stats"] = decision_stats
         except Exception as e:
             self.logger.error(f"检索需求判断失败: {e}")
-            # 出错时默认需要检索
             state["need_retrieval"] = True
             state["need_retrieval_reason"] = f"检索需求判断过程出错: {str(e)}"
+            state["original_question"] = latest_message
+            decision_stats["stage"] = "fallback_error"
+            decision_stats["reason"] = state["need_retrieval_reason"]
+            decision_stats["decision_path"] = decision_stats["decision_path"] + ["fallback:error"]
+            state["retrieval_decision_stats"] = decision_stats
 
         return state
 
@@ -521,12 +1389,54 @@ class RAGNodes:
 
         # 获取原始问题
         original_question = state.get("original_question", "")
+        rule_library = self._get_rule_library()
+        subquestion_policy = rule_library.get("subquestion_policy", {})
+        rule_library_meta = rule_library.get("meta", {})
+        configured_max_count = self._policy_int("subquestion_max_count", self._safe_int(subquestion_policy.get("max_count", self.subquestion_max_count), self.subquestion_max_count))
+        configured_trigger_min_chars = self._policy_int(
+            "subquestion_trigger_min_chars",
+            self._safe_int(subquestion_policy.get("trigger_min_chars", self.subquestion_trigger_min_chars), self.subquestion_trigger_min_chars)
+        )
+        expansion_stats = {
+            "enabled": self._policy_bool("enable_subquestion_expansion", self.enable_subquestion_expansion),
+            "triggered": False,
+            "reason": "",
+            "max_count": configured_max_count,
+            "trigger_min_chars": configured_trigger_min_chars,
+            "policy_id": str(subquestion_policy.get("id", "subquestion.default")),
+            "policy_version": str(subquestion_policy.get("version", self.rule_library_version)),
+            "policy_scope": str(subquestion_policy.get("scope", self.retrieval_cache_scope)),
+            "policy_source": str(rule_library_meta.get("source", "")),
+            "count_before_limit": 0,
+            "count_after_limit": 0,
+            "complexity": {}
+        }
         if not original_question:
             self.logger.warning("原始问题为空，无法扩展子问题")
             state["subquestions"] = []
+            expansion_stats["reason"] = "原始问题为空"
+            state["subquestion_expansion_stats"] = expansion_stats
+            return state
+
+        if not expansion_stats["enabled"]:
+            state["subquestions"] = []
+            expansion_stats["reason"] = "子问题扩展开关关闭"
+            state["subquestion_expansion_stats"] = expansion_stats
+            return state
+
+        normalized_question = original_question.strip()
+        complexity_result = self._compute_subquestion_complexity(normalized_question)
+        expansion_stats["complexity"] = complexity_result
+        trigger_by_length = len(normalized_question) >= configured_trigger_min_chars
+        if not (complexity_result.get("triggered") or trigger_by_length):
+            state["subquestions"] = []
+            expansion_stats["reason"] = "未达到复杂度触发门槛"
+            state["subquestion_expansion_stats"] = expansion_stats
             return state
 
         self.logger.info(f"原始问题: {original_question}")
+        expansion_stats["triggered"] = True
+        expansion_stats["reason"] = "命中复杂度或长度触发门槛"
 
         try:
             # 获取子问题扩展提示词
@@ -547,18 +1457,21 @@ class RAGNodes:
                 for sq in subquestions:
                     if sq and sq.strip() and sq.strip() not in cleaned_subquestions:
                         cleaned_subquestions.append(sq.strip())
-
-                state["subquestions"] = cleaned_subquestions
-                self.logger.info(f"成功扩展 {len(cleaned_subquestions)} 个子问题")
+                expansion_stats["count_before_limit"] = len(cleaned_subquestions)
+                limited_subquestions = cleaned_subquestions[:max(expansion_stats["max_count"], 0)]
+                expansion_stats["count_after_limit"] = len(limited_subquestions)
+                state["subquestions"] = limited_subquestions
+                self.logger.info(f"成功扩展 {len(limited_subquestions)} 个子问题")
             else:
-                # 如果没有生成子问题，使用原问题
-                state["subquestions"] = [original_question]
-                self.logger.info("未生成子问题，使用原问题")
+                state["subquestions"] = []
+                self.logger.info("未生成子问题，跳过扩展")
 
         except Exception as e:
             self.logger.error(f"子问题扩展失败: {e}")
-            # 失败时使用原问题作为唯一子问题
-            state["subquestions"] = [original_question]
+            state["subquestions"] = []
+            expansion_stats["reason"] = f"扩展失败: {str(e)}"
+
+        state["subquestion_expansion_stats"] = expansion_stats
 
         return state
 
@@ -581,57 +1494,9 @@ class RAGNodes:
 
         # 如果是AUTO模式，调用LLM进行智能判断
         if state["retrieval_mode"] == RetrievalMode.AUTO:
-            self.logger.info("AUTO模式，开始智能判断检索类型...")
-            state["retrieval_mode"] = RetrievalMode.VECTOR_ONLY
-            state["retrieval_mode_reason"] = "AUTO模式默认向量检索"
-
-            try:
-                # 获取原始问题
-                original_question = state.get("original_question", "")
-                if not original_question:
-                    self.logger.warning("未找到原始问题，默认使用向量检索")
-                    state["retrieval_mode"] = RetrievalMode.VECTOR_ONLY
-                    return state
-
-                # 构建提示词
-                prompt_template = RAGGraphPrompts.get_retrieval_type_judgment_prompt()
-                prompt = prompt_template.format(question=original_question)
-
-                # 调用LLM进行判断
-                if not self.llm:
-                    self.logger.warning("未找到LLM实例，默认使用向量检索")
-                    state["retrieval_mode"] = RetrievalMode.VECTOR_ONLY
-                    return state
-
-                # 使用结构化输出调用LLM
-                try:
-                    structured_llm = self.llm.with_structured_output(RetrievalTypeDecision)
-                    decision = structured_llm.invoke(prompt)
-                    state["retrieval_mode_reason"] = decision.reasoning
-                    retrieval_type = (decision.retrieval_type or "").strip().lower()
-                    # 根据LLM判断结果更新检索模式
-                    if retrieval_type == "vector_only":
-                        state["retrieval_mode"] = RetrievalMode.VECTOR_ONLY
-                        self.logger.info(f"LLM判断：使用向量检索 - {decision.reasoning}")
-                    elif retrieval_type == "hybrid":
-                        state["retrieval_mode"] = RetrievalMode.HYBRID
-                        self.logger.info(f"LLM判断：使用融合检索 - {decision.reasoning}")
-                    elif retrieval_type == "graph_only":
-                        state["retrieval_mode"] = RetrievalMode.HYBRID
-                        self.logger.info(f"LLM判断：graph_only已映射为融合检索 - {decision.reasoning}")
-                    else:
-                        self.logger.warning(f"未知的检索类型 {decision.retrieval_type}，默认使用向量检索")
-                        state["retrieval_mode"] = RetrievalMode.VECTOR_ONLY
-
-                except Exception as parse_error:
-                    self.logger.error(f"结构化输出调用失败: {parse_error}")
-                    # 解析失败时默认使用向量检索
-                    state["retrieval_mode"] = RetrievalMode.VECTOR_ONLY
-
-            except Exception as e:
-                self.logger.error(f"检索类型判断失败: {e}")
-                # 出错时默认使用向量检索
-                state["retrieval_mode"] = RetrievalMode.VECTOR_ONLY
+            self.logger.info("AUTO模式，使用向量优先+按需图检索策略")
+            state["retrieval_mode"] = RetrievalMode.HYBRID
+            state["retrieval_mode_reason"] = "AUTO模式统一走融合检索，向量优先并按条件补充图检索"
         else:
             self.logger.info(f"未进行智能判断，保持当前检索模式: {state['retrieval_mode']}")
             state["retrieval_mode_reason"] = f"未进行智能判断,保持当前检索模式{state['retrieval_mode']}"
@@ -702,6 +1567,41 @@ class RAGNodes:
         overlap = len(query_tokens & content_tokens)
         return overlap / len(query_tokens)
 
+    def _estimate_vector_confidence(self, query_text: str, docs: list[RetrievedDocument]) -> float:
+        if not query_text or not docs:
+            return 0.0
+        top_docs = docs[: min(3, len(docs))]
+        weighted_score = 0.0
+        total_weight = 0.0
+        for idx, doc in enumerate(top_docs):
+            weight = 1.0 / (idx + 1)
+            metadata = doc.metadata or {}
+            overlap_score = self._extract_overlap_score(query_text, doc.page_content)
+            semantic_score = max(0.0, float(metadata.get("semantic_score", 0.0)))
+            rrf_score = max(0.0, float(metadata.get("rrf_score", 0.0)))
+            fused = 0.75 * max(overlap_score, semantic_score) + 0.25 * min(rrf_score, 1.0)
+            weighted_score += weight * fused
+            total_weight += weight
+        if total_weight == 0.0:
+            return 0.0
+        return round(weighted_score / total_weight, 6)
+
+    def _get_chunk_role_weight(self, metadata: dict | None) -> float:
+        chunk_role = str((metadata or {}).get("chunk_role", "general_medical"))
+        return float(self.chunk_role_weights.get(chunk_role, self.chunk_role_weights.get("general_medical", 1.0)))
+
+    def _get_medical_priority_bonus(self, metadata: dict | None) -> float:
+        safe_metadata = metadata or {}
+        bonus = 0.0
+        if bool(safe_metadata.get("is_key_clause", False)):
+            bonus += self.key_clause_bonus
+        evidence_level = str(safe_metadata.get("evidence_level") or "").upper()
+        if evidence_level:
+            bonus += self.evidence_level_bonus
+            if evidence_level in {"I", "IA", "IB", "A", "A+", "A-"}:
+                bonus += self.evidence_level_bonus
+        return bonus
+
     def _content_similarity(self, left: str, right: str) -> float:
         if not left or not right:
             return 0.0
@@ -752,18 +1652,36 @@ class RAGNodes:
             return 0.0
         return dot_value / (left_norm * right_norm)
 
-    def _semantic_rerank_docs(self, query_text: str, docs: list[RetrievedDocument]) -> list[RetrievedDocument]:
+    def _semantic_rerank_docs(self, query_text: str, docs: list[RetrievedDocument]) -> tuple[list[RetrievedDocument], dict]:
+        rerank_stats = {
+            "enabled": self.enable_semantic_rerank,
+            "attempted": False,
+            "fallback": False,
+            "input_total": len(docs or []),
+            "input_used": 0,
+            "input_limit": self.semantic_rerank_max_inputs
+        }
         if not self.enable_semantic_rerank or not self.embedding_model or not query_text or not docs:
-            return docs
+            return docs, rerank_stats
+        limited_size = max(self._policy_int("semantic_rerank_max_inputs", self.semantic_rerank_max_inputs), 1)
+        rerank_candidates = list(docs[:limited_size])
+        tail_candidates = list(docs[limited_size:])
+        rerank_stats["attempted"] = True
+        rerank_stats["input_used"] = len(rerank_candidates)
+        self.semantic_rerank_total_count += 1
         try:
             query_vector = self.embedding_model.embed_query(query_text)
-            doc_texts = [doc.page_content for doc in docs]
+            doc_texts = [doc.page_content for doc in rerank_candidates]
             doc_vectors = self.embedding_model.embed_documents(doc_texts)
             scored_docs = []
-            for doc, vector in zip(docs, doc_vectors):
+            for doc, vector in zip(rerank_candidates, doc_vectors):
                 semantic_score = self._cosine_similarity(query_vector, vector)
                 metadata = dict(doc.metadata or {})
                 metadata["semantic_score"] = round(semantic_score, 6)
+                metadata["medical_priority"] = round(
+                    self._get_chunk_role_weight(metadata) + self._get_medical_priority_bonus(metadata),
+                    6
+                )
                 scored_docs.append(
                     RetrievedDocument(
                         page_content=doc.page_content,
@@ -773,14 +1691,17 @@ class RAGNodes:
             scored_docs.sort(
                 key=lambda d: (
                     float((d.metadata or {}).get("semantic_score", 0.0)),
+                    float((d.metadata or {}).get("medical_priority", 1.0)),
                     float((d.metadata or {}).get("rrf_score", 0.0))
                 ),
                 reverse=True
             )
-            return scored_docs
+            return scored_docs + tail_candidates, rerank_stats
         except Exception as exc:
+            self.semantic_rerank_fallback_count += 1
+            rerank_stats["fallback"] = True
             self.logger.warning(f"语义重排失败，回退至RRF排序: {exc}")
-            return docs
+            return docs, rerank_stats
 
     def _split_graph_result_to_docs(self, content: str, max_docs: int) -> list[RetrievedDocument]:
         stripped = (content or "").strip()
@@ -812,7 +1733,7 @@ class RAGNodes:
         graph_docs: list[RetrievedDocument],
         max_docs: int,
         query_text: str
-    ) -> list[RetrievedDocument]:
+    ) -> tuple[list[RetrievedDocument], dict]:
         rrf_k = self.rrf_k
         source_weights = {
             "vector": self.vector_source_weight,
@@ -839,7 +1760,10 @@ class RAGNodes:
                 key = doc_key(doc)
                 score = source_weights[source_tag] * (1.0 / (rrf_k + rank_index + 1))
                 lexical_bonus = 0.08 * self._extract_overlap_score(query_text, doc.page_content)
-                total = score + lexical_bonus
+                metadata = dict(doc.metadata or {})
+                role_weight = self._get_chunk_role_weight(metadata)
+                medical_bonus = self._get_medical_priority_bonus(metadata)
+                total = (score + lexical_bonus) * role_weight + medical_bonus
                 score_map[key] = score_map.get(key, 0.0) + total
                 if key not in doc_map:
                     doc_map[key] = doc
@@ -863,7 +1787,7 @@ class RAGNodes:
 
         ranked_docs = self._deduplicate_retrieved_docs(ranked_docs)
         ranked_docs = self._deduplicate_semantic_docs(ranked_docs)
-        ranked_docs = self._semantic_rerank_docs(query_text, ranked_docs)
+        ranked_docs, rerank_stats = self._semantic_rerank_docs(query_text, ranked_docs)
 
         text_docs = [doc for doc in ranked_docs if (doc.metadata or {}).get("chunk_type") != "chart"]
         chart_docs = [doc for doc in ranked_docs if (doc.metadata or {}).get("chunk_type") == "chart"]
@@ -895,7 +1819,7 @@ class RAGNodes:
         fused_docs = selected_text_docs + selected_chart_docs
         if not fused_docs:
             fused_docs = ranked_docs[:max_docs]
-        return fused_docs
+        return fused_docs, rerank_stats
 
     def vector_db_retrieval_node(self, state: RAGGraphState, runtime: Runtime[RAGContext]) -> RAGGraphState:
         """向量数据库检索节点
@@ -925,10 +1849,43 @@ class RAGNodes:
             state["vector_db_results"] = []
             return state
 
+        started_at = time.perf_counter()
+        cache_hit = False
         try:
             # 从context获取检索配置
             context = runtime.context
             max_docs = context.max_retrieval_docs if context else 3
+            subquestions = state.get("subquestions", [])
+            cache_key = self._build_retrieval_cache_key(
+                prefix="vector",
+                query_text=original_question,
+                subquestions=[],
+                max_docs=max_docs
+            )
+            cached_payload = self._get_cached_item(self._vector_retrieval_cache, cache_key)
+            if cached_payload is None:
+                redis_payload = self._get_redis_retrieval_cache_sync(cache_key)
+                if redis_payload is not None:
+                    cached_payload = self._deserialize_vector_cache_payload(redis_payload)
+                    self._set_cached_item(self._vector_retrieval_cache, cache_key, cached_payload)
+            if cached_payload:
+                cache_hit = True
+                cached_retrieved_docs, cached_vector_results = cached_payload
+                state["retrieved_docs"] = self._clone_retrieved_docs(cached_retrieved_docs)
+                state["vector_db_results"] = self._clone_retrieved_docs(cached_vector_results)
+                vector_confidence = self._estimate_vector_confidence(original_question, state["retrieved_docs"])
+                duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+                state["vector_retrieval_stats"] = {
+                    "cache_hit": True,
+                    "duration_ms": duration_ms,
+                    "question_count": 1 + len(subquestions),
+                    "retrieved_count": len(state["retrieved_docs"]),
+                    "vector_candidate_count": len(state["vector_db_results"]),
+                    "vector_confidence": vector_confidence
+                }
+                state["vector_confidence"] = vector_confidence
+                self.logger.info("向量检索命中本地缓存")
+                return state
 
             # 创建混合检索器
             hybrid_retriever = self.milvus_storage.create_hybrid_retriever(
@@ -939,7 +1896,6 @@ class RAGNodes:
             questions_to_search = [original_question]
 
             # 添加子问题到检索列表
-            subquestions = state.get("subquestions", [])
             if subquestions:
                 questions_to_search.extend(subquestions)
                 self.logger.info(f"将对 {len(questions_to_search)} 个问题进行检索（1个原始问题 + {len(subquestions)}个子问题）")
@@ -993,12 +1949,37 @@ class RAGNodes:
 
             state["retrieved_docs"] = fused_docs
             state["vector_db_results"] = unique_docs
+            vector_confidence = self._estimate_vector_confidence(original_question, fused_docs)
+            state["vector_confidence"] = vector_confidence
+            self._set_cached_item(
+                self._vector_retrieval_cache,
+                cache_key,
+                (self._clone_retrieved_docs(fused_docs), self._clone_retrieved_docs(unique_docs))
+            )
+            self._set_redis_retrieval_cache_sync(
+                cache_key,
+                self._serialize_vector_cache_payload(
+                    (self._clone_retrieved_docs(fused_docs), self._clone_retrieved_docs(unique_docs))
+                )
+            )
+            cache_hit = False
 
         except Exception as e:
             self.logger.error(f"向量检索失败: {e}")
             # 检索失败时设置空结果
             state["retrieved_docs"] = []
             state["vector_db_results"] = []
+            state["vector_confidence"] = 0.0
+        finally:
+            duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            state["vector_retrieval_stats"] = {
+                "cache_hit": cache_hit,
+                "duration_ms": duration_ms,
+                "question_count": 1 + len(state.get("subquestions", []) or []),
+                "retrieved_count": len(state.get("retrieved_docs") or []),
+                "vector_candidate_count": len(state.get("vector_db_results") or []),
+                "vector_confidence": float(state.get("vector_confidence") or 0.0)
+            }
 
         return state
 
@@ -1008,15 +1989,49 @@ class RAGNodes:
 
         context = runtime.context
         max_docs = context.max_retrieval_docs if context else 3
+        graph_budget_docs = self._resolve_graph_budget_docs(max_docs)
+        graph_circuit_open = self._is_graph_circuit_open()
 
-        state = self.vector_db_retrieval_node(state, runtime)
-        vector_docs = list(state.get("vector_db_results") or [])
-
-        state = await self.graph_db_retrieval_node(state, runtime)
-        graph_docs = list(state.get("graph_db_results") or [])
+        vector_state_seed = dict(state)
+        graph_state_seed = dict(state)
+        graph_state_seed["graph_max_docs"] = graph_budget_docs
+        graph_task = None if graph_circuit_open else asyncio.create_task(self.graph_db_retrieval_node(graph_state_seed, runtime))
+        vector_state = await asyncio.to_thread(self.vector_db_retrieval_node, vector_state_seed, runtime)
+        vector_docs = list(vector_state.get("vector_db_results") or [])
+        vector_selected_docs = list(vector_state.get("retrieved_docs") or [])
+        vector_confidence = float(vector_state.get("vector_confidence") or 0.0)
+        state["vector_db_results"] = vector_docs
+        state["vector_retrieval_stats"] = dict(vector_state.get("vector_retrieval_stats") or {})
+        should_skip_graph = graph_circuit_open or (
+            self.enable_conditional_graph and
+            len(vector_docs) >= max(self.conditional_graph_min_vector_docs, max_docs) and
+            vector_confidence >= self.conditional_graph_confidence_threshold
+        )
+        if should_skip_graph:
+            graph_docs = []
+            state["graph_db_results"] = []
+            if graph_task is not None and not graph_task.done():
+                graph_task.cancel()
+                try:
+                    await graph_task
+                except asyncio.CancelledError:
+                    pass
+            if graph_circuit_open:
+                self.logger.warning("图检索熔断开启，当前请求跳过图检索")
+            else:
+                self.logger.info(f"满足条件跳过图检索: vector_docs={len(vector_docs)}, max_docs={max_docs}")
+        else:
+            graph_state = await graph_task
+            graph_docs = list(graph_state.get("graph_db_results") or [])
+            state["graph_db_results"] = graph_docs
+            state["graph_retrieval_stats"] = dict(graph_state.get("graph_retrieval_stats") or {})
 
         query_text = state.get("original_question", "")
-        merged_docs = self._merge_retrieved_docs(vector_docs, graph_docs, max_docs, query_text)
+        merged_docs, rerank_stats = self._merge_retrieved_docs(vector_docs, graph_docs, max_docs, query_text)
+        rerank_fallback_rate = 0.0
+        if self.semantic_rerank_total_count > 0:
+            rerank_fallback_rate = round(self.semantic_rerank_fallback_count / self.semantic_rerank_total_count, 4)
+        metric_status = self._emit_semantic_rerank_metrics(rerank_stats)
         state["retrieved_docs"] = merged_docs
         state["vector_db_results"] = vector_docs
         state["graph_db_results"] = graph_docs
@@ -1025,7 +2040,18 @@ class RAGNodes:
             "graph_docs": len(graph_docs),
             "merged_docs": len(merged_docs),
             "rrf_k": self.rrf_k,
-            "mmr_lambda": self.mmr_lambda
+            "mmr_lambda": self.mmr_lambda,
+            "graph_skipped": should_skip_graph,
+            "graph_circuit_open": graph_circuit_open,
+            "graph_budget_docs": graph_budget_docs,
+            "vector_confidence": vector_confidence,
+            "vector_confidence_threshold": self.conditional_graph_confidence_threshold,
+            "vector_selected_docs": len(vector_selected_docs),
+            "semantic_rerank": rerank_stats,
+            "semantic_rerank_fallback_total": self.semantic_rerank_fallback_count,
+            "semantic_rerank_total": self.semantic_rerank_total_count,
+            "semantic_rerank_fallback_rate": rerank_fallback_rate,
+            "semantic_rerank_metrics": metric_status
         }
 
         self.logger.info(
@@ -1054,12 +2080,48 @@ class RAGNodes:
         self.logger.info(f"执行图数据库检索，查询: {query_text}")
 
         try:
+            started_at = time.perf_counter()
+            context = runtime.context
+            max_docs = context.max_retrieval_docs if context else 3
+            graph_budget_docs = state.get("graph_max_docs")
+            if isinstance(graph_budget_docs, int) and graph_budget_docs > 0:
+                max_docs = graph_budget_docs
+            cache_key = self._build_retrieval_cache_key(
+                prefix="graph",
+                query_text=query_text,
+                subquestions=[],
+                max_docs=max_docs,
+                extra=getattr(self.lightrag_storage, "workspace", "default")
+            )
+            cached_graph = await self._get_cached_item_async(
+                self._graph_retrieval_cache,
+                cache_key,
+                lambda payload: self._deserialize_retrieved_docs(payload.get("docs") or [])
+            )
+            if cached_graph is not None:
+                graph_docs = self._clone_retrieved_docs(cached_graph)
+                state["retrieved_docs"] = graph_docs
+                state["graph_db_results"] = graph_docs
+                state["graph_retrieval_stats"] = {
+                    "cache_hit": True,
+                    "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                    "retrieved_count": len(graph_docs),
+                    "timeout_seconds": self.graph_query_timeout_seconds,
+                    "budget_docs": max_docs
+                }
+                self._record_graph_success(state["graph_retrieval_stats"]["duration_ms"])
+                self.logger.info("图数据库检索命中本地缓存")
+                return state
+
 
             # 执行图数据库检索 - 使用global模式进行图检索
-            result = await self.lightrag_storage.query(
-                query=query_text,
-                mode="hybrid",  # global模式专门用于图数据库检索
-                only_need_prompt=True
+            result = await asyncio.wait_for(
+                self.lightrag_storage.query(
+                    query=query_text,
+                    mode="hybrid",
+                    only_need_prompt=True
+                ),
+                timeout=self.graph_query_timeout_seconds
             )
 
             # self.logger.info(f"图数据库检索原始结果: {result}")
@@ -1073,24 +2135,70 @@ class RAGNodes:
                     result = result.split(dc_marker, 1)[1].strip()
                     #self.logger.info(f"提取Document Chunks后的结果: {result}")
 
-                context = runtime.context
-                max_docs = context.max_retrieval_docs if context else 3
                 graph_docs = self._split_graph_result_to_docs(result, max_docs)
 
                 state["retrieved_docs"] = graph_docs
                 state["graph_db_results"] = graph_docs
+                await self._set_cached_item_async(
+                    self._graph_retrieval_cache,
+                    cache_key,
+                    self._clone_retrieved_docs(graph_docs),
+                    lambda docs: {"docs": self._serialize_retrieved_docs(docs)}
+                )
 
                 self.logger.info(f"图数据库检索成功，结果长度: {len(result)}")
+                state["graph_retrieval_stats"] = {
+                    "cache_hit": False,
+                    "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                    "retrieved_count": len(graph_docs),
+                    "timeout_seconds": self.graph_query_timeout_seconds,
+                    "budget_docs": max_docs
+                }
+                self._record_graph_success(state["graph_retrieval_stats"]["duration_ms"])
             else:
                 self.logger.warning("图数据库检索未返回结果")
                 state["retrieved_docs"] = []
                 state["graph_db_results"] = []
+                await self._set_cached_item_async(
+                    self._graph_retrieval_cache,
+                    cache_key,
+                    [],
+                    lambda docs: {"docs": self._serialize_retrieved_docs(docs)}
+                )
+                state["graph_retrieval_stats"] = {
+                    "cache_hit": False,
+                    "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                    "retrieved_count": 0,
+                    "timeout_seconds": self.graph_query_timeout_seconds,
+                    "budget_docs": max_docs
+                }
+                self._record_graph_success(state["graph_retrieval_stats"]["duration_ms"])
 
+        except asyncio.TimeoutError:
+            self.logger.warning(f"图数据库检索超时，已降级为空结果，timeout={self.graph_query_timeout_seconds}s")
+            state["retrieved_docs"] = []
+            state["graph_db_results"] = []
+            state["graph_retrieval_stats"] = {
+                "cache_hit": False,
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                "retrieved_count": 0,
+                "timeout_seconds": self.graph_query_timeout_seconds,
+                "timed_out": True
+            }
+            self._record_graph_failure()
         except Exception as e:
             self.logger.error(f"图数据库检索失败: {e}")
             # 检索失败时设置空结果
             state["retrieved_docs"] = []
             state["graph_db_results"] = []
+            state["graph_retrieval_stats"] = {
+                "cache_hit": False,
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                "retrieved_count": 0,
+                "timeout_seconds": self.graph_query_timeout_seconds,
+                "error": str(e)
+            }
+            self._record_graph_failure()
 
         return state
 
@@ -1182,6 +2290,16 @@ class RAGNodes:
                     "page_number": doc.metadata.get("page_number")
                 }
                 sources.append(source_info)
+
+            fallback_docs = list(retrieved_docs or [])
+            if not fallback_docs:
+                fallback_docs = list(state.get("vector_db_results") or [])
+
+            answer_content = self._repair_contact_answer_if_needed(
+                original_question,
+                answer_content,
+                fallback_docs
+            )
 
             # 更新状态
             state["final_answer"] = answer_content

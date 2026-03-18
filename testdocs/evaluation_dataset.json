@@ -1,0 +1,231 @@
+{
+  "dataset_name": "骨科疾病诊疗指南测评集",
+  "version": "1.0",
+  "description": "用于测试RAG系统对骨关节炎和骨质疏松症诊疗指南的检索和问答能力",
+  "documents": [
+    "中国骨关节炎诊疗指南(2024版)",
+    "原发性骨质疏松症诊疗指南（2022）"
+  ],
+  "questions": [
+    {
+      "id": 1,
+      "question": "骨关节炎的高危人群有哪些？",
+      "type": "factoid",
+      "expected_keywords": ["40岁以上", "女性", "肥胖", "超重", "关节创伤史"],
+      "source_doc": "中国骨关节炎诊疗指南(2024版)"
+    },
+    {
+      "id": 2,
+      "question": "骨关节炎的发病率是多少？",
+      "type": "numerical",
+      "expected_answer": "40岁以上10%-17%，60岁50%，75岁80%",
+      "source_doc": "中国骨关节炎诊疗指南(2024版)"
+    },
+    {
+      "id": 3,
+      "question": "膝关节骨关节炎的诊断标准是什么？",
+      "type": "diagnostic",
+      "expected_keywords": ["近一个月内反复膝痛", "年龄≥50岁", "晨僵≤30分钟", "活动时有骨擦音", "X线片示关节间隙变窄"],
+      "source_doc": "中国骨关节炎诊疗指南(2024版)"
+    },
+    {
+      "id": 4,
+      "question": "骨关节炎的临床分期有哪些？",
+      "type": "classification",
+      "expected_keywords": ["初级阶段(前期)", "第一阶段(早期)", "第二阶段(轻度)", "第三阶段(中度)", "第四阶段(重度)"],
+      "source_doc": "中国骨关节炎诊疗指南(2024版)"
+    },
+    {
+      "id": 5,
+      "question": "骨关节炎的阶梯化治疗方案是什么？",
+      "type": "treatment",
+      "expected_keywords": ["基础治疗", "修复性治疗", "镇痛治疗", "重建性治疗"],
+      "source_doc": "中国骨关节炎诊疗指南(2024版)"
+    },
+    {
+      "id": 6,
+      "question": "骨关节炎的发病机制是什么？",
+      "type": "mechanism",
+      "expected_keywords": ["衰老", "肥胖", "炎症反应", "软骨退化", "细胞外基质"],
+      "source_doc": "中国骨关节炎诊疗指南(2024版)"
+    },
+    {
+      "id": 7,
+      "question": "骨关节炎的临床表现有哪些？",
+      "type": "symptom",
+      "expected_keywords": ["关节疼痛", "关节僵硬", "关节活动受限", "关节压痛", "关节畸形"],
+      "source_doc": "中国骨关节炎诊疗指南(2024版)"
+    },
+    {
+      "id": 8,
+      "question": "膝关节骨关节炎需要满足什么条件才能诊断？",
+      "type": "diagnostic",
+      "expected_keywords": ["1+其它任意2条", "满足1+2+3或1+3+4"],
+      "source_doc": "中国骨关节炎诊疗指南(2024版)"
+    },
+    {
+      "id": 9,
+      "question": "推荐使用的骨关节炎外用药物有哪些？",
+      "type": "medication",
+      "expected_keywords": ["洛索洛芬钠凝胶贴膏", "酮洛芬凝胶贴膏", "辣椒素", "骨通贴膏", "通络骨质宁膏"],
+      "source_doc": "中国骨关节炎诊疗指南(2024版)"
+    },
+    {
+      "id": 10,
+      "question": "原发性骨质疏松症的定义是什么？",
+      "type": "definition",
+      "expected_keywords": ["骨量低下", "骨组织微结构损坏", "骨脆性增加", "易发生骨折"],
+      "source_doc": "原发性骨质疏松症诊疗指南（2022）"
+    },
+    {
+      "id": 11,
+      "question": "我国骨质疏松症患病人数是多少？",
+      "type": "numerical",
+      "expected_answer": "约9000万，女性约7000万",
+      "source_doc": "原发性骨质疏松症诊疗指南（2022）"
+    },
+    {
+      "id": 12,
+      "question": "骨质疏松症分为哪几类？",
+      "type": "classification",
+      "expected_keywords": ["绝经后骨质疏松症", "老年骨质疏松症", "特发性骨质疏松症"],
+      "source_doc": "原发性骨质疏松症诊疗指南（2022）"
+    },
+    {
+      "id": 13,
+      "question": "骨质疏松症的危险因素有哪些？",
+      "type": "risk_factor",
+      "expected_keywords": ["增龄", "女性绝经", "吸烟", "过量饮酒", "维生素D缺乏", "体力活动少"],
+      "source_doc": "原发性骨质疏松症诊疗指南（2022）"
+    },
+    {
+      "id": 14,
+      "question": "OSTA指数如何计算？",
+      "type": "formula",
+      "expected_keywords": ["体质量kg-年龄岁×0.2"],
+      "source_doc": "原发性骨质疏松症诊疗指南（2022）"
+    },
+    {
+      "id": 15,
+      "question": "FRAX评估的阈值是多少？",
+      "type": "threshold",
+      "expected_keywords": ["髋部骨折≥3%", "主要骨质疏松性骨折≥20%"],
+      "source_doc": "原发性骨质疏松症诊疗指南（2022）"
+    },
+    {
+      "id": 16,
+      "question": "骨质疏松症的临床表现有哪些？",
+      "type": "symptom",
+      "expected_keywords": ["腰背疼痛", "全身骨痛", "脊柱变形", "身高变矮", "骨折"],
+      "source_doc": "原发性骨质疏松症诊疗指南（2022）"
+    },
+    {
+      "id": 17,
+      "question": "骨质疏松性骨折最常见的部位是哪里？",
+      "type": "factoid",
+      "expected_keywords": ["椎体", "髋部", "前臂远端", "肱骨近端"],
+      "source_doc": "原发性骨质疏松症诊疗指南（2022）"
+    },
+    {
+      "id": 18,
+      "question": "髋部骨折的危害是什么？",
+      "type": "harm",
+      "expected_keywords": ["20%死于并发症", "50%致残"],
+      "source_doc": "原发性骨质疏松症诊疗指南（2022）"
+    },
+    {
+      "id": 19,
+      "question": "50岁以上人群骨质疏松症患病率是多少？",
+      "type": "numerical",
+      "expected_answer": "19.2%，女性32.1%，男性6.9%",
+      "source_doc": "原发性骨质疏松症诊疗指南（2022）"
+    },
+    {
+      "id": 20,
+      "question": "65岁以上人群骨质疏松症患病率是多少？",
+      "type": "numerical",
+      "expected_answer": "32.0%，女性51.6%，男性10.7%",
+      "source_doc": "原发性骨质疏松症诊疗指南（2022）"
+    },
+    {
+      "id": 21,
+      "question": "骨关节炎与骨质疏松症有什么关系？",
+      "type": "comparison",
+      "expected_keywords": ["OA可导致关节问题", "骨质疏松是全身性骨病", "骨骼健康相关"],
+      "source_doc": "both"
+    },
+    {
+      "id": 22,
+      "question": "中老年人应该如何预防骨关节炎？",
+      "type": "prevention",
+      "expected_keywords": ["健康教育", "运动治疗", "物理治疗", "控制体重"],
+      "source_doc": "中国骨关节炎诊疗指南(2024版)"
+    },
+    {
+      "id": 23,
+      "question": "如何预防骨质疏松症？",
+      "type": "prevention",
+      "expected_keywords": ["补充钙剂", "补充维生素D", "适量运动", "戒烟限酒"],
+      "source_doc": "原发性骨质疏松症诊疗指南（2022）"
+    },
+    {
+      "id": 24,
+      "question": "骨关节炎的检查方法有哪些？",
+      "type": "examination",
+      "expected_keywords": ["X线检查", "MRI", "超声检测"],
+      "source_doc": "中国骨关节炎诊疗指南(2024版)"
+    },
+    {
+      "id": 25,
+      "question": "如何诊断骨质疏松症？",
+      "type": "diagnostic",
+      "expected_keywords": ["DXA骨密度测定", "T值≤-2.5"],
+      "source_doc": "原发性骨质疏松症诊疗指南（2022）"
+    }
+  ],
+  "evaluation_metrics": [
+    {
+      "metric": "faithfulness",
+      "description": "回答是否基于文档内容，无幻觉"
+    },
+    {
+      "metric": "answer_relevancy",
+      "description": "回答是否与问题相关"
+    },
+    {
+      "metric": "context_precision",
+      "description": "检索到的上下文是否精确"
+    },
+    {
+      "metric": "context_recall",
+      "description": "检索到的上下文是否完整"
+    }
+  ],
+  "test_scenarios": [
+    {
+      "scenario": "数值型问题",
+      "question_ids": [2, 11, 19, 20],
+      "focus": "测试RAG对精确数值的召回能力"
+    },
+    {
+      "scenario": "诊断标准",
+      "question_ids": [3, 8, 25],
+      "focus": "测试多条件诊断逻辑的检索"
+    },
+    {
+      "scenario": "分类/分期",
+      "question_ids": [4, 12],
+      "focus": "测试层级分类结构的召回"
+    },
+    {
+      "scenario": "治疗方案",
+      "question_ids": [5, 9, 23],
+      "focus": "测试治疗建议的完整性"
+    },
+    {
+      "scenario": "危险因素",
+      "question_ids": [1, 13],
+      "focus": "测试多因素列表的召回"
+    }
+  ]
+}

@@ -1,4 +1,5 @@
-from typing import List, Optional, Any, Union
+import re
+from typing import List, Optional, Any, Union, Dict, Tuple
 
 from langchain_text_splitters import CharacterTextSplitter, RecursiveCharacterTextSplitter
 from langchain_experimental.text_splitter import SemanticChunker
@@ -54,6 +55,8 @@ class TextChunker:
                 return self._recursive_chunk(document.content, config, document.document_name)
             elif config.strategy == ChunkStrategy.MARKDOWN_HEADER:
                 return self._markdown_header_chunk(document.content, config, document.document_name)
+            elif config.strategy == ChunkStrategy.MEDICAL_HYBRID:
+                return self._medical_hybrid_chunk(document.content, config, document.document_name)
             else:
                 return ChunkResult(
                     chunks=[],
@@ -82,9 +85,7 @@ class TextChunker:
         
         chunks = text_splitter.create_documents([text])
         
-        # 清空metadata
-        for chunk in chunks:
-            chunk.metadata = {}
+        chunks = [Document(page_content=chunk.page_content, metadata=dict(chunk.metadata or {})) for chunk in chunks]
         
         return ChunkResult(
             chunks=chunks,
@@ -116,9 +117,7 @@ class TextChunker:
         
         chunks = semantic_chunker.create_documents([text])
         
-        # 清空metadata
-        for chunk in chunks:
-            chunk.metadata = {}
+        chunks = [Document(page_content=chunk.page_content, metadata=dict(chunk.metadata or {})) for chunk in chunks]
         
         return ChunkResult(
             chunks=chunks,
@@ -138,9 +137,7 @@ class TextChunker:
         
         chunks = recursive_splitter.create_documents([text])
         
-        # 清空metadata
-        for chunk in chunks:
-            chunk.metadata = {}
+        chunks = [Document(page_content=chunk.page_content, metadata=dict(chunk.metadata or {})) for chunk in chunks]
         
         return ChunkResult(
             chunks=chunks,
@@ -157,13 +154,11 @@ class TextChunker:
         
         chunks = markdown_splitter.split_text(text)
         
-        # 转换为Document对象并清空metadata
+        # 转换为Document对象并保留结构metadata
         if isinstance(chunks, list) and chunks:
             if isinstance(chunks[0], Document):
-                # 清空所有Document的metadata
-                documents = [Document(page_content=doc.page_content, metadata={}) for doc in chunks]
+                documents = [Document(page_content=doc.page_content, metadata=dict(doc.metadata or {})) for doc in chunks]
             else:
-                # 如果是字符串列表，转换为Document（metadata已经为空）
                 documents = [Document(page_content=chunk, metadata={}) for chunk in chunks]
         else:
             documents = []
@@ -174,6 +169,94 @@ class TextChunker:
             total_chunks=len(documents),
             document_name=document_name
         )
+
+    def _medical_hybrid_chunk(self, text: str, config: ChunkConfig, document_name: str) -> ChunkResult:
+        sections = self._split_medical_sections(text, config)
+        documents: List[Document] = []
+        for section_title, section_text in sections:
+            section_chunks = self._split_medical_section_to_chunks(section_text, config)
+            for chunk_text in section_chunks:
+                cleaned_chunk = chunk_text.strip()
+                if not cleaned_chunk:
+                    continue
+                metadata = self._build_medical_metadata(section_title, cleaned_chunk)
+                documents.append(Document(page_content=cleaned_chunk, metadata=metadata))
+        return ChunkResult(
+            chunks=documents,
+            strategy=config.strategy,
+            total_chunks=len(documents),
+            document_name=document_name
+        )
+
+    def _split_medical_sections(self, text: str, config: ChunkConfig) -> List[Tuple[str, str]]:
+        markdown_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=config.headers_to_split_on)
+        split_docs = markdown_splitter.split_text(text)
+        sections: List[Tuple[str, str]] = []
+        if split_docs:
+            for doc in split_docs:
+                if not isinstance(doc, Document):
+                    continue
+                section_title = (
+                    doc.metadata.get("Header_6")
+                    or doc.metadata.get("Header_5")
+                    or doc.metadata.get("Header_4")
+                    or doc.metadata.get("Header_3")
+                    or doc.metadata.get("Header_2")
+                    or doc.metadata.get("Header_1")
+                    or "未标注章节"
+                )
+                content = (doc.page_content or "").strip()
+                if content:
+                    sections.append((section_title, content))
+        if not sections:
+            sections = [("未标注章节", text)]
+        merged_sections: List[Tuple[str, str]] = []
+        for title, content in sections:
+            if not merged_sections:
+                merged_sections.append((title, content))
+                continue
+            if len(content) < config.medical_min_section_length:
+                prev_title, prev_content = merged_sections[-1]
+                merged_sections[-1] = (prev_title, f"{prev_content}\n{content}")
+            else:
+                merged_sections.append((title, content))
+        return merged_sections
+
+    def _split_medical_section_to_chunks(self, section_text: str, config: ChunkConfig) -> List[str]:
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=config.medical_chunk_size,
+            chunk_overlap=config.medical_chunk_overlap,
+            length_function=len,
+            separators=config.separators
+        )
+        docs = splitter.create_documents([section_text])
+        return [doc.page_content for doc in docs if (doc.page_content or "").strip()]
+
+    def _build_medical_metadata(self, section_title: str, chunk_text: str) -> Dict[str, Any]:
+        title = (section_title or "未标注章节").strip()
+        content = chunk_text or ""
+        merged = f"{title}\n{content}".lower()
+        keyword_roles = [
+            ("contraindication", ["禁忌", "禁用", "慎用", "不适用", "妊娠", "哺乳"]),
+            ("dosage", ["用法", "用量", "剂量", "给药", "滴定", "频次", "疗程"]),
+            ("indication", ["适应症", "适用人群", "诊断标准", "纳入标准"]),
+            ("adverse_reaction", ["不良反应", "副作用", "风险", "并发症"]),
+            ("recommendation", ["推荐", "证据", "共识", "指南", "级别", "等级"])
+        ]
+        chunk_role = "general_medical"
+        for role, keywords in keyword_roles:
+            if any(keyword in merged for keyword in keywords):
+                chunk_role = role
+                break
+        evidence_match = re.search(r"(?:证据等级|推荐等级|grade|class)\s*[:：]?\s*([A-D][+-]?|I{1,3}[ab]?)", merged, re.IGNORECASE)
+        evidence_level = evidence_match.group(1).upper() if evidence_match else None
+        is_key_clause = chunk_role in {"contraindication", "dosage", "recommendation"}
+        return {
+            "section_title": title,
+            "chunk_role": chunk_role,
+            "evidence_level": evidence_level,
+            "is_key_clause": is_key_clause
+        }
     
     def chunk_with_strategy(self, text: str, strategy: Union[str, ChunkStrategy], 
                            document_name: str = "", **kwargs) -> ChunkResult:

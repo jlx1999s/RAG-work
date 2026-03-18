@@ -28,6 +28,7 @@ class RAGGraphState(TypedDict, total=False):
     retrieval_mode: str                # 检索模式（vector_only/hybrid/graph_only/no_retrieval/auto）
     need_retrieval: bool               # 是否需要检索
     need_retrieval_reason: Optional[str] = ""    # 需要检索的理由
+    retrieval_decision_stats: Dict[str, Any]  # 检索决策链路统计
     retrieval_mode_reason: Optional[str] = ""    # 检索模式的理由
     need_tool: bool                    # 是否需要调用工具
     selected_tool: Optional[str] = ""        # 选中的工具名称
@@ -37,6 +38,7 @@ class RAGGraphState(TypedDict, total=False):
     # ==================== 问题处理 ====================
     original_question: str             # 原始问题
     subquestions: List[str]            # 扩展的子问题列表
+    subquestion_expansion_stats: Dict[str, Any]  # 子问题扩展统计
     processed_questions: List[str]     # 已处理的问题列表
     
     # ==================== 检索结果 ====================
@@ -85,6 +87,9 @@ def create_initial_rag_state(
         
         # ==================== 流程控制 ====================
         retrieval_mode=context.retrieval_mode,
+        need_retrieval=True,
+        need_retrieval_reason="",
+        retrieval_decision_stats={},
         need_tool=False,
         selected_tool="",
         selected_skill="",
@@ -94,6 +99,7 @@ def create_initial_rag_state(
         # ==================== 问题处理 ====================
         original_question="",
         subquestions=[],
+        subquestion_expansion_stats={},
         processed_questions=[],
         
         # ==================== 检索结果 ====================

@@ -342,9 +342,14 @@ class DocumentProcessor:
         try:
             # 根据文件类型选择分块策略
             normalized_type = (file_type or "").lower()
-            if normalized_type in ["md", "markdown"]:
-                strategy = ChunkStrategy.MARKDOWN_HEADER
-                chunk_config = ChunkConfig(strategy=strategy)
+            if normalized_type in ["md", "markdown", "txt", "pdf", "doc", "docx"]:
+                strategy = ChunkStrategy.MEDICAL_HYBRID
+                chunk_config = ChunkConfig(
+                    strategy=strategy,
+                    medical_chunk_size=650,
+                    medical_chunk_overlap=100,
+                    medical_min_section_length=80
+                )
             else:
                 strategy = ChunkStrategy.RECURSIVE
                 chunk_config = ChunkConfig(strategy=strategy, chunk_size=1000, chunk_overlap=200)
@@ -357,10 +362,16 @@ class DocumentProcessor:
             
             # 执行分块
             result = self.chunker.chunk_document(document, chunk_config)
-            for chunk in result.chunks:
+            for idx, chunk in enumerate(result.chunks):
+                original_metadata = dict(chunk.metadata or {})
                 chunk.metadata = {
+                    **original_metadata,
                     "chunk_type": "text",
-                    "source": "vector"
+                    "source": "vector",
+                    "document_name": document_name,
+                    "file_type": normalized_type,
+                    "chunk_index": idx,
+                    "chunk_chars": len(chunk.page_content or "")
                 }
             
             logger.info(f"文档分块完成: {document_name}, 策略: {strategy.value}")

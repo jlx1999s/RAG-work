@@ -12,6 +12,7 @@ class ChunkStrategy(Enum):
     SEMANTIC = "semantic"           # 语义分块
     RECURSIVE = "recursive"         # 递归分块
     MARKDOWN_HEADER = "markdown_header"  # Markdown标题分块
+    MEDICAL_HYBRID = "medical_hybrid"  # 医疗场景混合分块
 
 
 @dataclass
@@ -44,6 +45,11 @@ class ChunkConfig:
     # Markdown分块专用参数
     headers_to_split_on: List[tuple] = None
 
+    # 医疗混合分块专用参数
+    medical_chunk_size: int = 650
+    medical_chunk_overlap: int = 100
+    medical_min_section_length: int = 80
+
     def __post_init__(self):
         """初始化默认值"""
         if self.separators is None and self.strategy == ChunkStrategy.RECURSIVE:
@@ -57,6 +63,33 @@ class ChunkConfig:
                 ("####", "Header_4"),
                 ("#####", "Header_5"),
                 ("######", "Header_6")
+            ]
+        if self.headers_to_split_on is None and self.strategy == ChunkStrategy.MEDICAL_HYBRID:
+            self.headers_to_split_on = [
+                ("#", "Header_1"),
+                ("##", "Header_2"),
+                ("###", "Header_3"),
+                ("####", "Header_4"),
+                ("#####", "Header_5"),
+                ("######", "Header_6")
+            ]
+        if self.separators is None and self.strategy == ChunkStrategy.MEDICAL_HYBRID:
+            self.separators = [
+                "\n\n",
+                "\n### ",
+                "\n## ",
+                "\n# ",
+                "\n- ",
+                "\n* ",
+                "\n1. ",
+                "\n2. ",
+                "\n3. ",
+                "\n",
+                "；",
+                "。",
+                "，",
+                " ",
+                ""
             ]
 
 

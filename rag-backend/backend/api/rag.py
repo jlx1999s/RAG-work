@@ -40,6 +40,11 @@ class EvalRequest(BaseModel):
     max_retrieval_docs: int = 3
     collection_id: Optional[str] = None
     dataset_name: Optional[str] = None
+    run_tag: Optional[str] = None
+    enable_ragas: bool = True
+    include_item_details: bool = True
+    cache_enabled: Optional[bool] = None
+    cache_namespace: Optional[str] = None
 
 
 class SaveEvalDatasetRequest(BaseModel):
@@ -57,6 +62,105 @@ def _safe_float(value: Any) -> Optional[float]:
         return float(value)
     except Exception:
         return None
+
+
+def _safe_divide(numerator: float, denominator: float) -> Optional[float]:
+    if denominator == 0:
+        return None
+    return numerator / denominator
+
+
+def _percentile(values: List[float], ratio: float) -> Optional[float]:
+    if not values:
+        return None
+    sorted_values = sorted(values)
+    if len(sorted_values) == 1:
+        return float(sorted_values[0])
+    idx = int(round((len(sorted_values) - 1) * ratio))
+    idx = max(0, min(idx, len(sorted_values) - 1))
+    return float(sorted_values[idx])
+
+
+def _aggregate_fusion_stats(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not rows:
+        return {}
+    summary: Dict[str, Any] = {}
+    candidate_keys = {
+        "vector_docs",
+        "graph_docs",
+        "merged_docs",
+        "rrf_k",
+        "mmr_lambda",
+        "selected_text_docs",
+        "selected_chart_docs",
+        "final_docs"
+    }
+    for key in candidate_keys:
+        values = [row.get(key) for row in rows if isinstance(row.get(key), (int, float))]
+        if values:
+            summary[key] = round(sum(values) / len(values), 6)
+    return summary
+
+
+def _build_retrieval_summary(items: List[Dict[str, Any]], fusion_stats_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    total = len(items)
+    if total == 0:
+        return {"total_items": 0}
+    contexts_counts = [int(item.get("contexts_count") or 0) for item in items]
+    context_char_lengths = [int(item.get("contexts_total_chars") or 0) for item in items]
+    no_context_count = sum(1 for count in contexts_counts if count == 0)
+    with_context_count = total - no_context_count
+    source_counter: Dict[str, int] = {}
+    for item in items:
+        for source_name, source_count in (item.get("retrieval_sources") or {}).items():
+            if isinstance(source_count, int):
+                source_counter[source_name] = source_counter.get(source_name, 0) + source_count
+    return {
+        "total_items": total,
+        "with_context_count": with_context_count,
+        "no_context_count": no_context_count,
+        "context_presence_rate": _safe_float(_safe_divide(with_context_count, total)),
+        "avg_contexts_per_item": round(sum(contexts_counts) / total, 4),
+        "avg_context_chars_per_item": round(sum(context_char_lengths) / total, 2),
+        "p95_contexts_per_item": _percentile([float(v) for v in contexts_counts], 0.95),
+        "source_distribution": source_counter,
+        "fusion_summary": _aggregate_fusion_stats(fusion_stats_rows)
+    }
+
+
+def _build_performance_summary(items: List[Dict[str, Any]], elapsed_ms: int) -> Dict[str, Any]:
+    total = len(items)
+    latencies = [float(item.get("latency_ms")) for item in items if isinstance(item.get("latency_ms"), (int, float))]
+    if total == 0:
+        return {"total_items": 0, "run_elapsed_ms": elapsed_ms}
+    throughput_qps = _safe_divide(total, elapsed_ms / 1000) if elapsed_ms > 0 else None
+    return {
+        "total_items": total,
+        "run_elapsed_ms": elapsed_ms,
+        "avg_latency_ms": round(sum(latencies) / len(latencies), 2) if latencies else None,
+        "p50_latency_ms": _percentile(latencies, 0.50),
+        "p95_latency_ms": _percentile(latencies, 0.95),
+        "p99_latency_ms": _percentile(latencies, 0.99),
+        "max_latency_ms": max(latencies) if latencies else None,
+        "min_latency_ms": min(latencies) if latencies else None,
+        "throughput_qps": round(throughput_qps, 4) if throughput_qps is not None else None
+    }
+
+
+def _build_stability_summary(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    total = len(items)
+    if total == 0:
+        return {"total_items": 0}
+    failed = sum(1 for item in items if item.get("status") == "error")
+    empty_answer = sum(1 for item in items if not (item.get("answer") or "").strip())
+    return {
+        "total_items": total,
+        "failed_items": failed,
+        "success_items": total - failed,
+        "error_rate": _safe_float(_safe_divide(failed, total)),
+        "empty_answer_count": empty_answer,
+        "empty_answer_rate": _safe_float(_safe_divide(empty_answer, total))
+    }
 
 
 def _parse_dataset_jsonl(raw_text: str) -> List[Dict[str, Any]]:
@@ -87,23 +191,37 @@ def _run_single_evaluation(
     question: str,
     context: RAGContext
 ) -> Dict[str, Any]:
+    start_time = time.time()
     input_data = {"messages": [{"role": "user", "content": question}]}
     output = rag_graph.invoke(input_data, context=context)
     answer = output.get("final_answer") or ""
     contexts = output.get("retrieved_docs") or []
     normalized_contexts = []
+    retrieval_sources: Dict[str, int] = {}
+    contexts_total_chars = 0
     for ctx in contexts:
         if ctx is None:
             continue
+        metadata = getattr(ctx, "metadata", {}) or {}
+        source_name = str(metadata.get("source") or "unknown")
+        retrieval_sources[source_name] = retrieval_sources.get(source_name, 0) + 1
         page_content = getattr(ctx, "page_content", None)
         if page_content is not None:
-            normalized_contexts.append(str(page_content))
+            content_text = str(page_content)
+            normalized_contexts.append(content_text)
+            contexts_total_chars += len(content_text)
         else:
-            normalized_contexts.append(str(ctx))
+            content_text = str(ctx)
+            normalized_contexts.append(content_text)
+            contexts_total_chars += len(content_text)
+    elapsed_ms = int((time.time() - start_time) * 1000)
     return {
         "answer": answer,
         "contexts": normalized_contexts,
-        "retrieval_fusion_stats": output.get("retrieval_fusion_stats") or {}
+        "retrieval_fusion_stats": output.get("retrieval_fusion_stats") or {},
+        "retrieval_sources": retrieval_sources,
+        "contexts_total_chars": contexts_total_chars,
+        "latency_ms": elapsed_ms
     }
 
 
@@ -163,6 +281,30 @@ def _run_ragas_eval(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     for idx, row in df.iterrows():
         items[idx]["metrics"] = {col: _safe_float(row[col]) for col in metric_cols}
     return {"metrics": summary, "items": items}
+
+
+def _build_cost_summary(items: List[Dict[str, Any]], elapsed_ms: int) -> Dict[str, Any]:
+    total = len(items)
+    context_chars = sum(int(item.get("contexts_total_chars") or 0) for item in items)
+    answer_chars = sum(len(item.get("answer") or "") for item in items)
+    avg_context_chars = _safe_divide(context_chars, total) if total else None
+    avg_answer_chars = _safe_divide(answer_chars, total) if total else None
+    return {
+        "estimated": {
+            "total_context_chars": context_chars,
+            "total_answer_chars": answer_chars,
+            "avg_context_chars_per_item": round(avg_context_chars, 2) if avg_context_chars is not None else None,
+            "avg_answer_chars_per_item": round(avg_answer_chars, 2) if avg_answer_chars is not None else None
+        },
+        "token_usage": {
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "total_tokens": None
+        },
+        "unit_economics": {
+            "avg_latency_ms_per_item": round(elapsed_ms / total, 2) if total else None
+        }
+    }
 
 
 def _get_eval_dataset_dir() -> Path:
@@ -255,25 +397,64 @@ async def _evaluate_payload(payload: EvalRequest, current_user: int) -> Dict[str
         reference = row.get("reference") or row.get("answer") or ""
         if not question:
             continue
-        eval_result = await run_in_threadpool(_run_single_evaluation, rag_graph, question, context)
-        contexts = eval_result.get("contexts") or []
-        fusion_stats = eval_result.get("retrieval_fusion_stats") or {}
-        if fusion_stats:
-            fusion_stats_rows.append(fusion_stats)
-        items.append({
+        item_record: Dict[str, Any] = {
             "question": question,
             "reference": reference,
-            "answer": eval_result.get("answer") or "",
-            "contexts": contexts,
-            "contexts_count": len(contexts),
-            "contexts_preview": [str(c)[:300] for c in contexts[:3]],
-            "retrieval_fusion_stats": fusion_stats
-        })
-    metrics_result: Dict[str, Any] = {}
-    try:
-        metrics_result = await run_in_threadpool(_run_ragas_eval, items)
-    except Exception as exc:
-        logger.error(f"RAGAS评测失败: {exc}")
+            "answer": "",
+            "status": "success",
+            "error": None,
+            "latency_ms": None,
+            "contexts": [],
+            "contexts_count": 0,
+            "contexts_total_chars": 0,
+            "contexts_preview": [],
+            "retrieval_sources": {},
+            "retrieval_fusion_stats": {},
+            "cache": {
+                "enabled": payload.cache_enabled,
+                "namespace": payload.cache_namespace,
+                "hit": None
+            }
+        }
+        try:
+            eval_result = await run_in_threadpool(_run_single_evaluation, rag_graph, question, context)
+            contexts = eval_result.get("contexts") or []
+            fusion_stats = eval_result.get("retrieval_fusion_stats") or {}
+            if fusion_stats:
+                fusion_stats_rows.append(fusion_stats)
+            item_record.update({
+                "answer": eval_result.get("answer") or "",
+                "latency_ms": eval_result.get("latency_ms"),
+                "contexts": contexts,
+                "contexts_count": len(contexts),
+                "contexts_total_chars": int(eval_result.get("contexts_total_chars") or 0),
+                "contexts_preview": [str(c)[:300] for c in contexts[:3]],
+                "retrieval_sources": eval_result.get("retrieval_sources") or {},
+                "retrieval_fusion_stats": fusion_stats
+            })
+        except Exception as exc:
+            logger.error(f"单条评测失败: {exc}")
+            item_record.update({
+                "status": "error",
+                "error": str(exc)
+            })
+        items.append(item_record)
+    metrics_result: Dict[str, Any] = {"metrics": {}, "items": items}
+    if payload.enable_ragas:
+        try:
+            metrics_result = await run_in_threadpool(_run_ragas_eval, items)
+        except Exception as exc:
+            logger.error(f"RAGAS评测失败: {exc}")
+            fallback = _fallback_metrics(items)
+            for item in items:
+                item["metrics"] = {
+                    "context_precision": None,
+                    "context_recall": None,
+                    "answer_relevancy": None,
+                    "faithfulness": None
+                }
+            metrics_result = {"metrics": fallback, "items": items, "warning": "RAGAS评测失败，已返回基础指标"}
+    else:
         fallback = _fallback_metrics(items)
         for item in items:
             item["metrics"] = {
@@ -282,20 +463,58 @@ async def _evaluate_payload(payload: EvalRequest, current_user: int) -> Dict[str
                 "answer_relevancy": None,
                 "faithfulness": None
             }
-        metrics_result = {"metrics": fallback, "items": items, "warning": "RAGAS评测失败，已返回基础指标"}
+        metrics_result = {"metrics": fallback, "items": items, "warning": "已关闭RAGAS，仅返回基础指标"}
     elapsed_ms = int((time.time() - start_time) * 1000)
-    fusion_summary = {}
-    if fusion_stats_rows:
-        for key in {"vector_docs", "graph_docs", "merged_docs", "rrf_k", "mmr_lambda"}:
-            values = [row.get(key) for row in fusion_stats_rows if isinstance(row.get(key), (int, float))]
-            if values:
-                fusion_summary[key] = round(sum(values) / len(values), 6)
+    evaluated_items = metrics_result.get("items", items)
+    fusion_summary = _aggregate_fusion_stats(fusion_stats_rows)
+    retrieval_summary = _build_retrieval_summary(evaluated_items, fusion_stats_rows)
+    performance_summary = _build_performance_summary(evaluated_items, elapsed_ms)
+    stability_summary = _build_stability_summary(evaluated_items)
+    cost_summary = _build_cost_summary(evaluated_items, elapsed_ms)
+    cache_summary = {
+        "enabled": payload.cache_enabled,
+        "namespace": payload.cache_namespace,
+        "hit_count": None,
+        "miss_count": None,
+        "hit_rate": None
+    }
+    run_report = {
+        "run_id": str(uuid4()),
+        "run_tag": payload.run_tag,
+        "created_at": time.time(),
+        "dataset": {
+            "name": (payload.dataset_name or "").strip() or None,
+            "total_rows": total_rows,
+            "used_rows": len(rows),
+            "request_size_bytes": len(payload.dataset_jsonl.encode("utf-8")) if payload.dataset_jsonl else 0
+        },
+        "config": {
+            "workspace": payload.workspace,
+            "collection_id": payload.collection_id,
+            "retrieval_mode": payload.retrieval_mode,
+            "max_retrieval_docs": payload.max_retrieval_docs,
+            "enable_ragas": payload.enable_ragas,
+            "limit": payload.limit or 0
+        },
+        "quality_summary": metrics_result.get("metrics", {}),
+        "retrieval_summary": retrieval_summary,
+        "performance_summary": performance_summary,
+        "stability_summary": stability_summary,
+        "cost_summary": cost_summary,
+        "cache_summary": cache_summary
+    }
     response_payload = {
+        "run": run_report,
         "summary": metrics_result.get("metrics", {}),
         "retrieval_fusion_summary": fusion_summary,
-        "items": metrics_result.get("items", items),
+        "retrieval_summary": retrieval_summary,
+        "performance_summary": performance_summary,
+        "stability_summary": stability_summary,
+        "cost_summary": cost_summary,
+        "cache_summary": cache_summary,
+        "items": evaluated_items if payload.include_item_details else [],
         "elapsed_ms": elapsed_ms,
-        "total": len(items),
+        "total": len(evaluated_items),
         "warning": metrics_result.get("warning")
     }
     try:
@@ -311,6 +530,10 @@ async def _evaluate_payload(payload: EvalRequest, current_user: int) -> Dict[str
             "retrieval_mode": payload.retrieval_mode,
             "max_retrieval_docs": payload.max_retrieval_docs,
             "collection_id": payload.collection_id,
+            "enable_ragas": payload.enable_ragas,
+            "run_tag": payload.run_tag,
+            "cache_enabled": payload.cache_enabled,
+            "cache_namespace": payload.cache_namespace,
             "limit": payload.limit or 0,
             "result": response_payload
         }
