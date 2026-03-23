@@ -2,6 +2,7 @@ from langgraph.runtime import Runtime
 from ..states.raggraph_state import RAGGraphState
 from ..contexts.raggraph_context import RAGContext
 from ..models.raggraph_models import RetrievalMode, RetrievedDocument
+from ..models.retrieval_classifier import RetrievalIntentClassifier
 from ..prompts.raggraph_prompt import (
     RAGGraphPrompts,
     RetrievalNeedDecision,
@@ -167,6 +168,40 @@ class RAGNodes:
         )
         self.retrieval_classifier_yes_threshold = float(os.getenv("RAG_RETRIEVAL_CLASSIFIER_YES_THRESHOLD", "2.0"))
         self.retrieval_classifier_margin = float(os.getenv("RAG_RETRIEVAL_CLASSIFIER_MARGIN", "1.0"))
+        self.retrieval_lightweight_classifier_enabled = os.getenv(
+            "RAG_RETRIEVAL_LIGHTWEIGHT_CLASSIFIER_ENABLED", "false"
+        ).lower() in {"true", "1", "yes", "on"}
+        self.retrieval_lightweight_classifier_only_when_stat_unavailable = os.getenv(
+            "RAG_RETRIEVAL_LIGHTWEIGHT_CLASSIFIER_ONLY_WHEN_STAT_UNAVAILABLE", "true"
+        ).lower() in {"true", "1", "yes", "on"}
+        default_classifier_model_path = os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__),
+                "..",
+                "models",
+                "artifacts",
+                "retrieval_intent_nb_v1.json"
+            )
+        )
+        self.retrieval_statistical_classifier_enabled = os.getenv(
+            "RAG_RETRIEVAL_STAT_CLASSIFIER_ENABLED", "true"
+        ).lower() in {"true", "1", "yes", "on"}
+        self.retrieval_statistical_classifier_model_path = os.getenv(
+            "RAG_RETRIEVAL_STAT_CLASSIFIER_MODEL_PATH",
+            default_classifier_model_path
+        )
+        self.retrieval_statistical_classifier_positive_threshold = float(
+            os.getenv("RAG_RETRIEVAL_STAT_CLASSIFIER_POSITIVE_THRESHOLD", "0.75")
+        )
+        self.retrieval_statistical_classifier_negative_threshold = float(
+            os.getenv("RAG_RETRIEVAL_STAT_CLASSIFIER_NEGATIVE_THRESHOLD", "0.25")
+        )
+        self.retrieval_statistical_classifier = RetrievalIntentClassifier(
+            model_path=self.retrieval_statistical_classifier_model_path,
+            enabled=self.retrieval_statistical_classifier_enabled,
+            positive_threshold=self.retrieval_statistical_classifier_positive_threshold,
+            negative_threshold=self.retrieval_statistical_classifier_negative_threshold,
+        )
         self.rule_library_version = os.getenv("RAG_RULE_LIBRARY_VERSION", "v1")
         self.rule_library_redis_enabled = os.getenv("RAG_RULE_LIBRARY_REDIS_ENABLED", "true").lower() in {"true", "1", "yes", "on"}
         self.rule_library_redis_prefix = os.getenv("RAG_RULE_LIBRARY_REDIS_PREFIX", "rag:rule_library")
@@ -879,6 +914,17 @@ class RAGNodes:
             "no_score": round(no_score, 4),
             "margin": round(margin, 4)
         }
+
+    def _statistical_retrieval_classifier(self, question: str) -> dict:
+        classifier = getattr(self, "retrieval_statistical_classifier", None)
+        if classifier is None:
+            return {
+                "available": False,
+                "decision": None,
+                "reason": "classifier_not_initialized",
+                "model_version": "unknown"
+            }
+        return classifier.predict(question or "")
 
     def _compute_subquestion_complexity(self, question: str) -> dict:
         normalized = (question or "").strip()
@@ -1804,6 +1850,7 @@ class RAGNodes:
             "stage": "",
             "reason": "",
             "rule_result": None,
+            "statistical_classifier_result": None,
             "classifier_result": None,
             "llm_result": None,
             "rule_library_version": self.rule_library_version,
@@ -1853,17 +1900,42 @@ class RAGNodes:
                 state["retrieval_decision_stats"] = decision_stats
                 return state
 
-            classifier_result = self._lightweight_retrieval_classifier(latest_message)
-            decision_stats["classifier_result"] = classifier_result
-            if classifier_result.get("decision") is not None:
-                state["need_retrieval"] = bool(classifier_result.get("decision"))
-                state["need_retrieval_reason"] = classifier_result.get("reason", "")
+            statistical_result = self._statistical_retrieval_classifier(latest_message)
+            decision_stats["statistical_classifier_result"] = statistical_result
+            if statistical_result.get("decision") is not None:
+                state["need_retrieval"] = bool(statistical_result.get("decision"))
+                state["need_retrieval_reason"] = statistical_result.get("reason", "")
                 state["original_question"] = latest_message
-                decision_stats["stage"] = "lightweight_classifier"
+                decision_stats["stage"] = "statistical_classifier"
                 decision_stats["reason"] = state["need_retrieval_reason"]
-                decision_stats["decision_path"] = decision_stats["decision_path"] + ["fallback:lightweight_classifier"]
+                decision_stats["decision_path"] = decision_stats["decision_path"] + ["fallback:statistical_classifier"]
                 state["retrieval_decision_stats"] = decision_stats
                 return state
+
+            should_use_lightweight = self.retrieval_lightweight_classifier_enabled
+            if should_use_lightweight and self.retrieval_lightweight_classifier_only_when_stat_unavailable:
+                should_use_lightweight = not bool(statistical_result.get("available"))
+            if should_use_lightweight:
+                classifier_result = self._lightweight_retrieval_classifier(latest_message)
+                decision_stats["classifier_result"] = classifier_result
+                if classifier_result.get("decision") is not None:
+                    state["need_retrieval"] = bool(classifier_result.get("decision"))
+                    state["need_retrieval_reason"] = classifier_result.get("reason", "")
+                    state["original_question"] = latest_message
+                    decision_stats["stage"] = "lightweight_classifier"
+                    decision_stats["reason"] = state["need_retrieval_reason"]
+                    decision_stats["decision_path"] = decision_stats["decision_path"] + ["fallback:lightweight_classifier"]
+                    state["retrieval_decision_stats"] = decision_stats
+                    return state
+            else:
+                decision_stats["classifier_result"] = {
+                    "decision": None,
+                    "reason": "lightweight_classifier_disabled",
+                    "yes_score": None,
+                    "no_score": None,
+                    "margin": None,
+                }
+                decision_stats["decision_path"] = decision_stats["decision_path"] + ["skip:lightweight_classifier"]
 
             prompt_template = RAGGraphPrompts.get_retrieval_need_judgment_prompt()
             prompt = prompt_template.format(question=latest_message)

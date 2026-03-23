@@ -12,6 +12,14 @@ export async function getRagEvaluationStatus(taskId) {
   return httpClient.get(`/rag/evaluate-status/${encodeURIComponent(taskId)}`)
 }
 
+export async function cancelRagEvaluation(taskId) {
+  return httpClient.post(`/rag/evaluate-cancel/${encodeURIComponent(taskId)}`, {})
+}
+
+export async function trainIntentClassifier(payload) {
+  return httpClient.post('/rag/classifier-train', payload)
+}
+
 export async function listEvalDatasets() {
   return httpClient.get('/rag/eval-datasets')
 }
@@ -40,4 +48,10 @@ export async function getEvalHistoryItems(historyId, params = {}) {
   const query = new URLSearchParams(params).toString()
   const suffix = query ? `?${query}` : ''
   return httpClient.get(`/rag/eval-history/${encodeURIComponent(historyId)}/items${suffix}`)
+}
+
+export async function getEvalHistoryBadcases(historyId, params = {}) {
+  const query = new URLSearchParams(params).toString()
+  const suffix = query ? `?${query}` : ''
+  return httpClient.get(`/rag/eval-history/${encodeURIComponent(historyId)}/badcases${suffix}`)
 }

@@ -1,0 +1,200 @@
+{"question": "帮我把“利伐沙班需要遵医嘱服用”翻译成英文", "need_retrieval": false, "created_at": "2025-11-15", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "乳腺结节患者的随访表在你们资料库哪个文档？", "need_retrieval": true, "created_at": "2025-08-28", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "请查一下慢病随访模板中关于胃食管反流并发症筛查的章节。", "need_retrieval": true, "created_at": "2025-02-26", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "请把这句转成更简短：青年女性要坚持运动", "need_retrieval": false, "created_at": "2025-03-11", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "你们知识库中有类风湿关节炎患者的饮食建议吗？请给出处（如有请附来源）", "need_retrieval": true, "created_at": "2025-04-24", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "你们知识库中有慢性肾病患者的饮食建议吗？请给出处？", "need_retrieval": true, "created_at": "2025-01-01", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "请根据院内指南说明慢性肾病在术后康复的管理流程。", "need_retrieval": true, "created_at": "2025-12-24", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "焦虑障碍复诊频率在健康宣教手册里怎么规定？（如有请附来源）", "need_retrieval": true, "created_at": "2025-03-03", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "我是谁。不要太长", "need_retrieval": false, "created_at": "2025-02-26", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "请润色这段通知：术后康复请按时打卡", "need_retrieval": false, "created_at": "2025-05-17", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "帮我生成一段短视频文案，主题是焦虑障碍科普，谢谢", "need_retrieval": false, "created_at": "2025-05-01", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "我是谁，谢谢", "need_retrieval": false, "created_at": "2025-06-02", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "阿托伐他汀常见不良反应和监测指标在文档里怎么写？。", "need_retrieval": true, "created_at": "2025-11-03", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "恩格列净常见不良反应和监测指标在文档里怎么写？。", "need_retrieval": true, "created_at": "2025-04-16", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "缬沙坦常见不良反应和监测指标在文档里怎么写？？", "need_retrieval": true, "created_at": "2025-03-07", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "出院指导单里FT4正常范围是多少？？", "need_retrieval": true, "created_at": "2025-05-09", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "我是谁", "need_retrieval": false, "created_at": "2025-01-17", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "慢阻肺复诊频率在院内指南里怎么规定？ 请分点列出。", "need_retrieval": true, "created_at": "2025-08-20", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "肺结节复诊频率在院内指南里怎么规定？", "need_retrieval": true, "created_at": "2025-09-17", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "写一个乳腺结节健康宣教海报标题，谢谢", "need_retrieval": false, "created_at": "2025-04-04", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "帮我把“氯吡格雷需要遵医嘱服用”翻译成英文。不要太长", "need_retrieval": false, "created_at": "2025-03-03", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "请根据健康宣教手册说明痛风在夜间急诊分诊的管理流程 请简要回答。", "need_retrieval": true, "created_at": "2025-06-02", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "把“尿酸偏高需复查”改成更专业语气", "need_retrieval": false, "created_at": "2025-12-28", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "请润色这段通知：社区慢病管理请按时打卡。", "need_retrieval": false, "created_at": "2025-06-22", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "输出一个 JSON，字段包含 title 和 content，主题是帕金森病宣教。不要太长", "need_retrieval": false, "created_at": "2025-01-05", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "瑞舒伐他汀常见不良反应和监测指标在文档里怎么写？ 请分点列出。", "need_retrieval": true, "created_at": "2025-09-21", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "护理规范里FT4正常范围是多少？？", "need_retrieval": true, "created_at": "2025-11-07", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "2023年肺结节指南里对FT4目标值怎么建议？（如有请附来源）", "need_retrieval": true, "created_at": "2025-04-04", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "请润色这段通知：夜间急诊分诊请按时打卡。", "need_retrieval": false, "created_at": "2025-05-21", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "请根据专家共识说明痛风在术前评估的管理流程", "need_retrieval": true, "created_at": "2025-04-04", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "最新版共识对类风湿关节炎转诊标准是什么？ 请分点列出。", "need_retrieval": true, "created_at": "2025-08-12", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "给我写一句安慰甲亢患者的话。", "need_retrieval": false, "created_at": "2025-10-14", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "请根据健康宣教手册说明焦虑障碍在远程复诊的管理流程（如有请附来源）", "need_retrieval": true, "created_at": "2025-02-10", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "请润色这段通知：术前评估请按时打卡。", "need_retrieval": false, "created_at": "2025-09-05", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "把“HbA1c偏高需复查”改成更专业语气。", "need_retrieval": false, "created_at": "2025-08-04", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "最新版共识对卒中后遗症转诊标准是什么？？", "need_retrieval": true, "created_at": "2025-05-21", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "把这句话改写得更口语化：2型糖尿病患者需监测D-二聚体，谢谢", "need_retrieval": false, "created_at": "2025-03-15", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "请总结成一句话：社区慢病管理重在依从性，谢谢", "need_retrieval": false, "created_at": "2025-07-23", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "写一个慢性肾病健康宣教海报标题～", "need_retrieval": false, "created_at": "2025-02-18", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "2023年脂肪肝指南里对收缩压目标值怎么建议？。", "need_retrieval": true, "created_at": "2025-03-27", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "数据库中有没有社区慢病管理的标准话术模板？", "need_retrieval": true, "created_at": "2025-10-02", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "你是谁。不要太长", "need_retrieval": false, "created_at": "2025-09-17", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "给我 3 条朋友圈文案，主题：氯吡格雷按时服用。", "need_retrieval": false, "created_at": "2025-01-21", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "改写这句：健康宣教手册建议定期复查。不要太长", "need_retrieval": false, "created_at": "2025-03-19", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "帮我把“阿司匹林需要遵医嘱服用”翻译成英文", "need_retrieval": false, "created_at": "2025-10-02", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "你好。不要太长", "need_retrieval": false, "created_at": "2025-11-19", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "你是谁。", "need_retrieval": false, "created_at": "2025-02-26", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "把这句话改写得更口语化：房颤患者需监测CRP。", "need_retrieval": false, "created_at": "2025-07-07", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "阿尔茨海默病在远程复诊中需要做哪些检查项目？。", "need_retrieval": true, "created_at": "2025-12-08", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "把这句话改写得更口语化：骨质疏松患者需监测收缩压～", "need_retrieval": false, "created_at": "2025-10-22", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "数据库中有没有社区慢病管理的标准话术模板？（如有请附来源）", "need_retrieval": true, "created_at": "2025-05-01", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "请把这句转成更简短：老年女性要坚持运动，谢谢", "need_retrieval": false, "created_at": "2025-10-22", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "谢谢你", "need_retrieval": false, "created_at": "2025-08-08", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "哮喘患者的随访表在你们资料库哪个文档？ 请简要回答。", "need_retrieval": true, "created_at": "2025-11-23", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "计算一下 48 + 73 等于多少，谢谢", "need_retrieval": false, "created_at": "2025-06-14", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "请给我2型糖尿病相关官方来源和链接。", "need_retrieval": true, "created_at": "2025-12-20", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "卒中后遗症在术后康复中需要做哪些检查项目？ 请简要回答。", "need_retrieval": true, "created_at": "2025-10-14", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "请给我抑郁症相关官方来源和链接（如有请附来源）", "need_retrieval": true, "created_at": "2025-04-16", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "请查一下专家共识中关于焦虑障碍并发症筛查的章节（如有请附来源）", "need_retrieval": true, "created_at": "2025-01-25", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "请根据护理规范说明抑郁症在远程复诊的管理流程？", "need_retrieval": true, "created_at": "2025-07-07", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "请润色这段通知：门诊随访请按时打卡，谢谢", "need_retrieval": false, "created_at": "2025-08-04", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "请按院内指南总结卒中后遗症患者的危险分层标准 请简要回答。", "need_retrieval": true, "created_at": "2025-12-12", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "写一首关于健康管理的小诗。", "need_retrieval": false, "created_at": "2025-08-20", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "把这句话改写得更口语化：慢性肾病患者需监测尿酸。", "need_retrieval": false, "created_at": "2025-09-09", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "请把这句转成更简短：老年女性要坚持运动～", "need_retrieval": false, "created_at": "2025-10-18", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "请查一下慢病随访模板中关于慢阻肺并发症筛查的章节。", "need_retrieval": true, "created_at": "2025-11-27", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "门诊流程文档里TSH正常范围是多少？ 请分点列出。", "need_retrieval": true, "created_at": "2025-02-02", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "2025年乳腺结节指南里对尿酸目标值怎么建议？？", "need_retrieval": true, "created_at": "2025-09-09", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "你们知识库中有痛风患者的饮食建议吗？请给出处。", "need_retrieval": true, "created_at": "2025-08-16", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "请查一下健康宣教手册中关于慢性肾病并发症筛查的章节。", "need_retrieval": true, "created_at": "2025-06-14", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "你是谁", "need_retrieval": false, "created_at": "2025-09-05", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "写一个卒中后遗症健康宣教海报标题。", "need_retrieval": false, "created_at": "2025-05-17", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "把下面句子做中英互译：甲亢需要长期随访。", "need_retrieval": false, "created_at": "2025-06-18", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "把这句话改写得更口语化：抑郁症患者需监测尿酸～", "need_retrieval": false, "created_at": "2025-07-03", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "请给我乳腺结节相关官方来源和链接 请分点列出。", "need_retrieval": true, "created_at": "2025-05-25", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "把“收缩压偏高需复查”改成更专业语气", "need_retrieval": false, "created_at": "2025-05-05", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "给我写一句安慰慢性肾病患者的话。不要太长", "need_retrieval": false, "created_at": "2025-09-09", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "你是谁，谢谢", "need_retrieval": false, "created_at": "2025-11-11", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "帮我把“阿卡波糖需要遵医嘱服用”翻译成英文，谢谢", "need_retrieval": false, "created_at": "2025-05-05", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "把“TSH偏高需复查”改成更专业语气，谢谢", "need_retrieval": false, "created_at": "2025-10-10", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "数据库中有没有家庭自我监测的标准话术模板？ 请分点列出。", "need_retrieval": true, "created_at": "2025-10-26", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "骨质疏松患者的随访表在你们资料库哪个文档？（如有请附来源）", "need_retrieval": true, "created_at": "2025-01-05", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "你好。", "need_retrieval": false, "created_at": "2025-10-26", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "帮我起一个活动名：甲减患者打卡挑战，谢谢", "need_retrieval": false, "created_at": "2025-12-08", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "给我写一句安慰焦虑障碍患者的话，谢谢", "need_retrieval": false, "created_at": "2025-02-06", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "最新版共识对慢阻肺转诊标准是什么？（如有请附来源）", "need_retrieval": true, "created_at": "2025-10-18", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "帮我起一个活动名：脂肪肝患者打卡挑战～", "need_retrieval": false, "created_at": "2025-12-04", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "改写这句：国家指南建议定期复查。", "need_retrieval": false, "created_at": "2025-11-11", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "写一首关于健康管理的小诗～", "need_retrieval": false, "created_at": "2025-08-20", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "给我 3 条朋友圈文案，主题：阿司匹林按时服用，谢谢", "need_retrieval": false, "created_at": "2025-12-12", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "2024年骨质疏松指南里对TSH目标值怎么建议？（如有请附来源）", "need_retrieval": true, "created_at": "2025-05-13", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "写一个焦虑障碍健康宣教海报标题", "need_retrieval": false, "created_at": "2025-11-07", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "请按健康宣教手册总结痛风患者的危险分层标准", "need_retrieval": true, "created_at": "2025-03-19", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "房颤复诊频率在院内指南里怎么规定？ 请分点列出。", "need_retrieval": true, "created_at": "2025-06-10", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "最新版共识对慢阻肺转诊标准是什么？ 请分点列出。", "need_retrieval": true, "created_at": "2025-06-06", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "数据库中有没有出院后管理的标准话术模板？ 请分点列出。", "need_retrieval": true, "created_at": "2025-02-14", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "请给我甲减相关官方来源和链接 请分点列出。", "need_retrieval": true, "created_at": "2025-02-02", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "请润色这段通知：术前评估请按时打卡，谢谢", "need_retrieval": false, "created_at": "2025-12-24", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "青年女性患高血压时，阿司匹林的禁忌和注意事项有哪些？", "need_retrieval": true, "created_at": "2025-01-13", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "请按国家指南总结乳腺结节患者的危险分层标准 请分点列出。", "need_retrieval": true, "created_at": "2025-07-15", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "房颤复诊频率在护理规范里怎么规定？ 请分点列出。", "need_retrieval": true, "created_at": "2025-01-13", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "把下面句子做中英互译：胃食管反流需要长期随访～", "need_retrieval": false, "created_at": "2025-09-01", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "帮我把“氨氯地平需要遵医嘱服用”翻译成英文。不要太长", "need_retrieval": false, "created_at": "2025-03-15", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "输出一个 JSON，字段包含 title 和 content，主题是冠心病宣教，谢谢", "need_retrieval": false, "created_at": "2025-01-09", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "写一首关于健康管理的小诗。不要太长", "need_retrieval": false, "created_at": "2025-11-23", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "房颤患者的随访表在你们资料库哪个文档？ 请分点列出。", "need_retrieval": true, "created_at": "2025-08-04", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "请给我卒中后遗症相关官方来源和链接", "need_retrieval": true, "created_at": "2025-11-19", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "给我 3 条朋友圈文案，主题：恩格列净按时服用。", "need_retrieval": false, "created_at": "2025-07-03", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "请查一下专家共识中关于冠心病并发症筛查的章节 请简要回答。", "need_retrieval": true, "created_at": "2025-06-22", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "最新版共识对房颤转诊标准是什么？。", "need_retrieval": true, "created_at": "2025-01-09", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "慢病随访模板里TSH正常范围是多少？", "need_retrieval": true, "created_at": "2025-01-01", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "阿尔茨海默病复诊频率在出院指导单里怎么规定？ 请分点列出。", "need_retrieval": true, "created_at": "2025-04-20", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "瑞舒伐他汀常见不良反应和监测指标在文档里怎么写？。", "need_retrieval": true, "created_at": "2025-05-05", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "脂肪肝在出院后管理中需要做哪些检查项目？？", "need_retrieval": true, "created_at": "2025-07-03", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "输出一个 JSON，字段包含 title 和 content，主题是胃食管反流宣教，谢谢", "need_retrieval": false, "created_at": "2025-07-07", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "计算一下 48 + 73 等于多少。", "need_retrieval": false, "created_at": "2025-10-10", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "请把这句转成更简短：青年男性要坚持运动", "need_retrieval": false, "created_at": "2025-03-23", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "房颤患者的随访表在你们资料库哪个文档？。", "need_retrieval": true, "created_at": "2025-10-22", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "帮我生成一段短视频文案，主题是冠心病科普。", "need_retrieval": false, "created_at": "2025-07-15", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "帮我把“恩格列净需要遵医嘱服用”翻译成英文～", "need_retrieval": false, "created_at": "2025-06-18", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "帮我把“华法林需要遵医嘱服用”翻译成英文～", "need_retrieval": false, "created_at": "2025-05-13", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "数据库中有没有夜间急诊分诊的标准话术模板？？", "need_retrieval": true, "created_at": "2025-12-16", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "高血压复诊频率在国家指南里怎么规定？？", "need_retrieval": true, "created_at": "2025-04-08", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "孕妇患高血压时，沙格列汀的禁忌和注意事项有哪些？？", "need_retrieval": true, "created_at": "2025-10-10", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "请查一下出院指导单中关于2型糖尿病并发症筛查的章节。", "need_retrieval": true, "created_at": "2025-06-18", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "给我写一句安慰冠心病患者的话，谢谢", "need_retrieval": false, "created_at": "2025-01-13", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "缬沙坦常见不良反应和监测指标在文档里怎么写？ 请分点列出。", "need_retrieval": true, "created_at": "2025-08-24", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "给我 3 条朋友圈文案，主题：二甲双胍按时服用。不要太长", "need_retrieval": false, "created_at": "2025-07-19", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "门诊流程文档里FT4正常范围是多少？？", "need_retrieval": true, "created_at": "2025-07-19", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "把“空腹血糖偏高需复查”改成更专业语气。不要太长", "need_retrieval": false, "created_at": "2025-12-24", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "请按护理规范总结慢性肾病患者的危险分层标准 请简要回答。", "need_retrieval": true, "created_at": "2025-09-01", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "数据库中有没有远程复诊的标准话术模板？", "need_retrieval": true, "created_at": "2025-02-18", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "请查一下健康宣教手册中关于哮喘并发症筛查的章节。", "need_retrieval": true, "created_at": "2025-08-08", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "帮我起一个活动名：乳腺结节患者打卡挑战，谢谢", "need_retrieval": false, "created_at": "2025-08-08", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "谢谢你，谢谢", "need_retrieval": false, "created_at": "2025-01-25", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "输出一个 JSON，字段包含 title 和 content，主题是焦虑障碍宣教～", "need_retrieval": false, "created_at": "2025-06-26", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "请查一下健康宣教手册中关于房颤并发症筛查的章节", "need_retrieval": true, "created_at": "2025-07-27", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "请给我焦虑障碍相关官方来源和链接。", "need_retrieval": true, "created_at": "2025-04-28", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "阿卡波糖常见不良反应和监测指标在文档里怎么写？。", "need_retrieval": true, "created_at": "2025-09-05", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "把“空腹血糖偏高需复查”改成更专业语气。", "need_retrieval": false, "created_at": "2025-05-09", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "请根据慢病随访模板说明冠心病在家庭自我监测的管理流程", "need_retrieval": true, "created_at": "2025-03-23", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "门诊流程文档里CRP正常范围是多少？（如有请附来源）", "need_retrieval": true, "created_at": "2025-12-28", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "卒中后遗症患者的随访表在你们资料库哪个文档？", "need_retrieval": true, "created_at": "2025-07-11", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "给我写一句安慰慢性肾病患者的话，谢谢", "need_retrieval": false, "created_at": "2025-11-03", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "请总结成一句话：远程复诊重在依从性。不要太长", "need_retrieval": false, "created_at": "2025-03-07", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "请根据慢病随访模板说明2型糖尿病在远程复诊的管理流程", "need_retrieval": true, "created_at": "2025-05-05", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "把这句话改写得更口语化：痛风患者需监测BNP～", "need_retrieval": false, "created_at": "2025-09-13", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "改写这句：院内指南建议定期复查。不要太长", "need_retrieval": false, "created_at": "2025-07-19", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "请给我乳腺结节相关官方来源和链接", "need_retrieval": true, "created_at": "2025-11-11", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "你们知识库中有卒中后遗症患者的饮食建议吗？请给出处 请简要回答。", "need_retrieval": true, "created_at": "2025-07-23", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "最新版共识对房颤转诊标准是什么？ 请简要回答。", "need_retrieval": true, "created_at": "2025-11-15", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "请把这句转成更简短：肥胖患者要坚持运动", "need_retrieval": false, "created_at": "2025-12-16", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "最新版共识对高血压转诊标准是什么？ 请分点列出。", "need_retrieval": true, "created_at": "2025-06-06", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "帮我把“二甲双胍需要遵医嘱服用”翻译成英文，谢谢", "need_retrieval": false, "created_at": "2025-09-21", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "改写这句：国家指南建议定期复查。不要太长", "need_retrieval": false, "created_at": "2025-03-27", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "把“CRP偏高需复查”改成更专业语气～", "need_retrieval": false, "created_at": "2025-08-24", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "写一个冠心病健康宣教海报标题，谢谢", "need_retrieval": false, "created_at": "2025-04-28", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "请查一下护理规范中关于脂肪肝并发症筛查的章节？", "need_retrieval": true, "created_at": "2025-01-21", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "写一个肺结节健康宣教海报标题～", "need_retrieval": false, "created_at": "2025-04-16", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "你们知识库中有心力衰竭患者的饮食建议吗？请给出处 请分点列出。", "need_retrieval": true, "created_at": "2025-04-12", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "请给我阿尔茨海默病相关官方来源和链接 请分点列出。", "need_retrieval": true, "created_at": "2025-02-22", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "帮我把“氨氯地平需要遵医嘱服用”翻译成英文，谢谢", "need_retrieval": false, "created_at": "2025-06-10", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "计算一下 48 + 73 等于多少", "need_retrieval": false, "created_at": "2025-08-12", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "2022年胃食管反流指南里对舒张压目标值怎么建议？ 请简要回答。", "need_retrieval": true, "created_at": "2025-08-08", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "肥胖患者患哮喘时，缬沙坦的禁忌和注意事项有哪些？ 请简要回答。", "need_retrieval": true, "created_at": "2025-05-17", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "请总结成一句话：门诊随访重在依从性～", "need_retrieval": false, "created_at": "2025-01-13", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "慢阻肺在术前评估中需要做哪些检查项目？", "need_retrieval": true, "created_at": "2025-03-11", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "请根据慢病随访模板说明焦虑障碍在社区慢病管理的管理流程。", "need_retrieval": true, "created_at": "2025-06-26", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "2021年骨质疏松指南里对D-二聚体目标值怎么建议？ 请分点列出。", "need_retrieval": true, "created_at": "2025-09-09", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "帮我生成一段短视频文案，主题是房颤科普。不要太长", "need_retrieval": false, "created_at": "2025-06-02", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "把下面句子做中英互译：乳腺结节需要长期随访", "need_retrieval": false, "created_at": "2025-11-27", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "给我 3 条朋友圈文案，主题：氨氯地平按时服用，谢谢", "need_retrieval": false, "created_at": "2025-09-21", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "把这句话改写得更口语化：冠心病患者需监测LDL-C，谢谢", "need_retrieval": false, "created_at": "2025-02-14", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "肾功能不全患者患焦虑障碍时，氯吡格雷的禁忌和注意事项有哪些？ 请分点列出。", "need_retrieval": true, "created_at": "2025-03-03", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "把这句话改写得更口语化：慢阻肺患者需监测TSH。不要太长", "need_retrieval": false, "created_at": "2025-12-20", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "请润色这段通知：出院后管理请按时打卡。", "need_retrieval": false, "created_at": "2025-10-06", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "请按护理规范总结焦虑障碍患者的危险分层标准", "need_retrieval": true, "created_at": "2025-02-06", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "请检索焦虑障碍合并卒中后遗症时的联合管理建议（如有请附来源）", "need_retrieval": true, "created_at": "2025-07-07", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "帮我生成一段短视频文案，主题是抑郁症科普～", "need_retrieval": false, "created_at": "2025-07-27", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "请润色这段通知：家庭自我监测请按时打卡。不要太长", "need_retrieval": false, "created_at": "2025-04-08", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "请检索脂肪肝合并焦虑障碍时的联合管理建议 请简要回答。", "need_retrieval": true, "created_at": "2025-12-04", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "改写这句：慢病随访模板建议定期复查", "need_retrieval": false, "created_at": "2025-12-12", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "给我写一句安慰高血压患者的话，谢谢", "need_retrieval": false, "created_at": "2025-03-27", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "数据库中有没有术前评估的标准话术模板？？", "need_retrieval": true, "created_at": "2025-10-10", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "你好，谢谢", "need_retrieval": false, "created_at": "2025-02-22", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "请总结成一句话：家庭自我监测重在依从性。", "need_retrieval": false, "created_at": "2025-07-11", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "肥胖患者患脂肪肝时，缬沙坦的禁忌和注意事项有哪些？ 请简要回答。", "need_retrieval": true, "created_at": "2025-12-12", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "帮我起一个活动名：焦虑障碍患者打卡挑战。", "need_retrieval": false, "created_at": "2025-08-16", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "请给我慢性肾病相关官方来源和链接 请分点列出。", "need_retrieval": true, "created_at": "2025-09-25", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "谢谢你～", "need_retrieval": false, "created_at": "2025-06-06", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "慢性肾病患者的随访表在你们资料库哪个文档？。", "need_retrieval": true, "created_at": "2025-03-15", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "冠心病在术前评估中需要做哪些检查项目？。", "need_retrieval": true, "created_at": "2025-10-06", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "阿司匹林常见不良反应和监测指标在文档里怎么写？（如有请附来源）", "need_retrieval": true, "created_at": "2025-09-13", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "谢谢你。", "need_retrieval": false, "created_at": "2025-01-01", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "请检索高血压合并心力衰竭时的联合管理建议。", "need_retrieval": true, "created_at": "2025-01-17", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "你们知识库中有焦虑障碍患者的饮食建议吗？请给出处（如有请附来源）", "need_retrieval": true, "created_at": "2025-03-15", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "给我写一句安慰痛风患者的话。", "need_retrieval": false, "created_at": "2025-06-06", "difficulty": "hard", "domain": "medical_rag_intent"}
+{"question": "氨氯地平常见不良反应和监测指标在文档里怎么写？ 请简要回答。", "need_retrieval": true, "created_at": "2025-11-11", "difficulty": "medium", "domain": "medical_rag_intent"}
+{"question": "把下面句子做中英互译：痛风需要长期随访", "need_retrieval": false, "created_at": "2025-04-20", "difficulty": "easy", "domain": "medical_rag_intent"}
+{"question": "请检索甲减合并骨质疏松时的联合管理建议？", "need_retrieval": true, "created_at": "2025-05-17", "difficulty": "medium", "domain": "medical_rag_intent"}

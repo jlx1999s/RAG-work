@@ -40,6 +40,10 @@ const router = createRouter({
     },
     {
       path: '/evaluation',
+      redirect: '/evaluation/rag-full'
+    },
+    {
+      path: '/evaluation/:lab',
       name: 'evaluation',
       component: Evaluation,
       meta: { requiresAuth: true }
