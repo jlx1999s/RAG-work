@@ -134,6 +134,26 @@ const resultStability = computed(() => {
   return result.value?.run?.stability_summary ?? result.value?.stability_summary ?? null
 })
 
+const resultSop = computed(() => {
+  return result.value?.run?.sop_summary ?? result.value?.sop_summary ?? null
+})
+
+const resultAnswerOverlap = computed(() => {
+  return result.value?.run?.answer_overlap_summary ?? result.value?.answer_overlap_summary ?? null
+})
+
+const resultSlices = computed(() => {
+  return result.value?.run?.slice_summary ?? result.value?.slice_summary ?? null
+})
+
+const resultQualityGates = computed(() => {
+  return result.value?.run?.quality_gate_summary ?? result.value?.quality_gate_summary ?? null
+})
+
+const resultBaseline = computed(() => {
+  return result.value?.run?.baseline_comparison ?? result.value?.baseline_comparison ?? null
+})
+
 const resultCost = computed(() => {
   return result.value?.run?.cost_summary ?? result.value?.cost_summary ?? null
 })
@@ -148,6 +168,18 @@ const historyDetailSummary = computed(() => {
 
 const historyDetailStability = computed(() => {
   return historyDetail.value?.result?.run?.stability_summary ?? historyDetail.value?.result?.stability_summary ?? null
+})
+
+const historyDetailSop = computed(() => {
+  return historyDetail.value?.result?.run?.sop_summary ?? historyDetail.value?.result?.sop_summary ?? null
+})
+
+const historyDetailGates = computed(() => {
+  return historyDetail.value?.result?.run?.quality_gate_summary ?? historyDetail.value?.result?.quality_gate_summary ?? null
+})
+
+const historyDetailBaseline = computed(() => {
+  return historyDetail.value?.result?.run?.baseline_comparison ?? historyDetail.value?.result?.baseline_comparison ?? null
 })
 
 const historyItemsTotalPages = computed(() => {
@@ -224,6 +256,43 @@ const formatPercent = (value) => {
   const num = Number(value)
   if (Number.isNaN(num)) return '--'
   return `${(num * 100).toFixed(1)}%`
+}
+
+const getItemSop = (item) => {
+  return item?.sop || {}
+}
+
+const formatTriageLabel = (value) => {
+  const triage = String(value || '').toLowerCase()
+  if (triage === 'emergency') return '急诊'
+  if (triage === 'urgent') return '紧急'
+  if (triage === 'routine') return '常规'
+  return '未知'
+}
+
+const formatBoolFlag = (value) => {
+  if (value === null || value === undefined) return '--'
+  return value ? '是' : '否'
+}
+
+const gateStatusLabel = (status) => {
+  if (status === 'pass') return '通过'
+  if (status === 'fail') return '失败'
+  return '跳过'
+}
+
+const gateStatusClass = (status) => {
+  if (status === 'pass') return 'bg-emerald-50 text-emerald-700 border-emerald-200'
+  if (status === 'fail') return 'bg-rose-50 text-rose-700 border-rose-200'
+  return 'bg-slate-50 text-slate-700 border-slate-200'
+}
+
+const formatDelta = (value) => {
+  if (value === null || value === undefined) return '--'
+  const num = Number(value)
+  if (Number.isNaN(num)) return '--'
+  const prefix = num > 0 ? '+' : ''
+  return `${prefix}${num.toFixed(4)}`
 }
 
 const goBack = () => {
@@ -738,7 +807,7 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <div v-if="resultPerformance || resultRetrieval || resultStability || resultCost || resultCache" class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+          <div v-if="resultPerformance || resultRetrieval || resultStability || resultSop || resultAnswerOverlap || resultCost || resultCache" class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
             <div class="rounded-xl border border-gray-100 bg-slate-50 p-3 space-y-2">
               <div class="text-gray-500">性能</div>
               <div class="grid grid-cols-2 gap-2 text-gray-700">
@@ -755,6 +824,8 @@ onUnmounted(() => {
                 <div>上下文覆盖 {{ formatPercent(resultRetrieval?.context_presence_rate) }}</div>
                 <div>P95上下文 {{ formatNumber(resultRetrieval?.p95_contexts_per_item) }}</div>
                 <div>平均上下文字数 {{ formatNumber(resultRetrieval?.avg_context_chars_per_item) }}</div>
+                <div>标注上下文命中 {{ formatPercent(resultRetrieval?.labeled_context_hit_rate) }}</div>
+                <div>标注来源命中 {{ formatPercent(resultRetrieval?.labeled_source_hit_rate) }}</div>
               </div>
               <div class="flex flex-wrap gap-2 text-[11px] text-gray-600">
                 <span v-for="[sourceName, count] in sourceEntries" :key="sourceName" class="px-2 py-0.5 rounded-full bg-white border border-gray-200">
@@ -772,6 +843,27 @@ onUnmounted(() => {
               </div>
             </div>
             <div class="rounded-xl border border-gray-100 bg-slate-50 p-3 space-y-2">
+              <div class="text-gray-500">医疗SOP安全</div>
+              <div class="grid grid-cols-2 gap-2 text-gray-700">
+                <div>医疗问题占比 {{ formatPercent(resultSop?.medical_item_rate) }}</div>
+                <div>转人工率 {{ formatPercent(resultSop?.handoff_rate) }}</div>
+                <div>结构化有效率 {{ formatPercent(resultSop?.structured_decision_valid_rate) }}</div>
+                <div>平均红线数 {{ formatNumber(resultSop?.avg_red_flags_per_item, 3) }}</div>
+              </div>
+              <div class="text-[11px] text-gray-500">
+                标注转人工准确率 {{ formatPercent(resultSop?.handoff_accuracy) }}
+              </div>
+            </div>
+            <div class="rounded-xl border border-gray-100 bg-slate-50 p-3 space-y-2">
+              <div class="text-gray-500">答案重合（轻量）</div>
+              <div class="grid grid-cols-2 gap-2 text-gray-700">
+                <div>覆盖率 {{ formatPercent(resultAnswerOverlap?.answer_overlap_coverage_rate) }}</div>
+                <div>平均F1 {{ formatNumber(resultAnswerOverlap?.avg_answer_overlap_f1, 3) }}</div>
+                <div>平均Precision {{ formatNumber(resultAnswerOverlap?.avg_answer_overlap_precision, 3) }}</div>
+                <div>平均Recall {{ formatNumber(resultAnswerOverlap?.avg_answer_overlap_recall, 3) }}</div>
+              </div>
+            </div>
+            <div class="rounded-xl border border-gray-100 bg-slate-50 p-3 space-y-2">
               <div class="text-gray-500">成本与缓存</div>
               <div class="grid grid-cols-2 gap-2 text-gray-700">
                 <div>上下文总字数 {{ resultCost?.estimated?.total_context_chars ?? '--' }}</div>
@@ -785,12 +877,92 @@ onUnmounted(() => {
             </div>
           </div>
 
+          <div v-if="resultQualityGates" class="rounded-xl border border-gray-100 bg-white p-3 space-y-3 text-xs">
+            <div class="flex items-center justify-between">
+              <div class="text-gray-700 font-semibold">质量门禁</div>
+              <span
+                class="px-2 py-0.5 rounded-full border"
+                :class="gateStatusClass(resultQualityGates?.overall_status)"
+              >
+                {{ gateStatusLabel(resultQualityGates?.overall_status) }}
+              </span>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <span class="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                通过 {{ resultQualityGates?.pass_count ?? 0 }}
+              </span>
+              <span class="px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200">
+                失败 {{ resultQualityGates?.fail_count ?? 0 }}
+              </span>
+              <span class="px-2 py-0.5 rounded-full bg-slate-50 text-slate-700 border border-slate-200">
+                跳过 {{ resultQualityGates?.skip_count ?? 0 }}
+              </span>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <div
+                v-for="check in resultQualityGates?.checks || []"
+                :key="check.key"
+                class="rounded-lg border px-2 py-1.5"
+                :class="gateStatusClass(check.status)"
+              >
+                <div class="font-medium">{{ check.label }} · {{ gateStatusLabel(check.status) }}</div>
+                <div class="text-[11px] mt-1">
+                  当前 {{ formatNumber(check.value, 4) }} {{ check.operator }} 阈值 {{ formatNumber(check.threshold, 4) }}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="resultBaseline?.found" class="rounded-xl border border-gray-100 bg-white p-3 space-y-2 text-xs">
+            <div class="text-gray-700 font-semibold">与历史基线对比</div>
+            <div class="text-gray-500">
+              基线 {{ formatHistoryTime(resultBaseline?.baseline_created_at) }} · {{ resultBaseline?.baseline_run_tag || '未命名' }}
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <div
+                v-for="(deltaInfo, metricKey) in resultBaseline?.deltas || {}"
+                :key="metricKey"
+                class="rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5"
+              >
+                <div class="text-gray-600">{{ metricKey }}</div>
+                <div class="text-gray-800">
+                  Δ {{ formatDelta(deltaInfo?.delta) }}（{{ formatNumber(deltaInfo?.baseline, 4) }} -> {{ formatNumber(deltaInfo?.current, 4) }}）
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="resultSlices" class="rounded-xl border border-gray-100 bg-white p-3 space-y-3 text-xs">
+            <div class="text-gray-700 font-semibold">分桶分析</div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div v-for="(bucketMap, sliceKey) in resultSlices" :key="sliceKey" class="space-y-2">
+                <div class="text-gray-500">{{ sliceKey }}</div>
+                <div
+                  v-for="(bucketStats, bucketName) in bucketMap || {}"
+                  :key="`${sliceKey}-${bucketName}`"
+                  class="rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5"
+                >
+                  <div class="text-gray-700 font-medium">{{ bucketName }} · {{ bucketStats?.count ?? 0 }}</div>
+                  <div class="text-gray-600">
+                    错误率 {{ formatPercent(bucketStats?.error_rate) }} · 转人工率 {{ formatPercent(bucketStats?.handoff_rate) }}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div class="space-y-3">
             <h3 class="text-sm font-semibold text-gray-900">详细样本</h3>
             <div v-if="!result" class="text-sm text-gray-500">
               运行评测后在此查看样本指标与检索上下文。
             </div>
             <div v-else class="space-y-4">
+              <div
+                v-if="!result.items || result.items.length === 0"
+                class="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2"
+              >
+                本次结果未返回样本明细。评测记录已保存，可在下方“评测历史 -> 查看”中分页查看条目。
+              </div>
               <div
                 v-for="(item, index) in result.items"
                 :key="index"
@@ -824,6 +996,23 @@ onUnmounted(() => {
                     {{ metric.label }} {{ formatScore(getItemMetricValue(item, metric.key)) }}
                   </span>
                 </div>
+                <div class="flex flex-wrap gap-2 text-xs">
+                  <span class="px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200">
+                    分诊 {{ formatTriageLabel(getItemSop(item).triage_level) }}
+                  </span>
+                  <span class="px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200">
+                    转人工 {{ formatBoolFlag(getItemSop(item).handoff_required) }}
+                  </span>
+                  <span class="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    结构化有效 {{ formatBoolFlag(getItemSop(item).structured_decision_valid) }}
+                  </span>
+                  <span
+                    v-if="item.expected_handoff !== null && item.expected_handoff !== undefined"
+                    class="px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200"
+                  >
+                    标注转人工 {{ formatBoolFlag(item.expected_handoff) }}
+                  </span>
+                </div>
                 <details class="bg-gray-50 rounded-lg p-3 text-xs text-gray-600">
                   <summary class="cursor-pointer text-gray-500">查看上下文预览</summary>
                   <div class="mt-2 space-y-2">
@@ -836,6 +1025,37 @@ onUnmounted(() => {
                     </div>
                     <div v-if="!item.contexts_preview || item.contexts_preview.length === 0">
                       未返回上下文
+                    </div>
+                  </div>
+                </details>
+                <details class="bg-slate-50 rounded-lg p-3 text-xs text-gray-600">
+                  <summary class="cursor-pointer text-gray-500">查看SOP执行链</summary>
+                  <div class="mt-2 space-y-2">
+                    <div>
+                      <span class="text-gray-400">红线命中：</span>
+                      <span class="text-gray-700">
+                        {{ (getItemSop(item).red_flags || []).join('、') || '无' }}
+                      </span>
+                    </div>
+                    <div>
+                      <span class="text-gray-400">转人工原因：</span>
+                      <span class="text-gray-700">{{ getItemSop(item).handoff_reason || '--' }}</span>
+                    </div>
+                    <div>
+                      <span class="text-gray-400">症状抽取：</span>
+                      <span class="text-gray-700">
+                        {{ (getItemSop(item).symptoms || []).join('、') || '--' }}
+                      </span>
+                    </div>
+                    <div>
+                      <span class="text-gray-400">干预摘要：</span>
+                      <span class="text-gray-700">{{ getItemSop(item).intervention_plan?.summary || '--' }}</span>
+                    </div>
+                    <div
+                      v-if="getItemSop(item).handoff_correct !== null && getItemSop(item).handoff_correct !== undefined"
+                    >
+                      <span class="text-gray-400">转人工判定正确：</span>
+                      <span class="text-gray-700">{{ formatBoolFlag(getItemSop(item).handoff_correct) }}</span>
                     </div>
                   </div>
                 </details>
@@ -927,7 +1147,7 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <div class="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
+          <div class="grid grid-cols-1 md:grid-cols-5 gap-3 text-xs">
             <div class="rounded-xl border border-gray-100 bg-slate-50 p-3">
               <div class="text-gray-500">拒答率</div>
               <div class="mt-2 text-base font-semibold text-gray-900">
@@ -952,6 +1172,31 @@ onUnmounted(() => {
                 {{ formatNumber(historyItemsStats?.avg_contexts_count) }}
               </div>
             </div>
+            <div class="rounded-xl border border-gray-100 bg-slate-50 p-3">
+              <div class="text-gray-500">历史转人工率</div>
+              <div class="mt-2 text-base font-semibold text-gray-900">
+                {{ formatPercent(historyDetailSop?.handoff_rate) }}
+              </div>
+            </div>
+          </div>
+
+          <div v-if="historyDetailGates" class="rounded-xl border border-gray-100 bg-white p-3 space-y-2 text-xs">
+            <div class="flex items-center justify-between">
+              <div class="text-gray-700 font-semibold">历史质量门禁</div>
+              <span
+                class="px-2 py-0.5 rounded-full border"
+                :class="gateStatusClass(historyDetailGates?.overall_status)"
+              >
+                {{ gateStatusLabel(historyDetailGates?.overall_status) }}
+              </span>
+            </div>
+            <div class="text-gray-500">
+              通过 {{ historyDetailGates?.pass_count ?? 0 }} · 失败 {{ historyDetailGates?.fail_count ?? 0 }} · 跳过 {{ historyDetailGates?.skip_count ?? 0 }}
+            </div>
+          </div>
+
+          <div v-if="historyDetailBaseline?.found" class="rounded-xl border border-gray-100 bg-white p-3 text-xs text-gray-600">
+            历史记录已关联基线：{{ historyDetailBaseline?.baseline_id || '--' }}
           </div>
 
           <div class="space-y-3">
@@ -959,6 +1204,20 @@ onUnmounted(() => {
               <div class="text-sm font-semibold text-gray-900">历史样本明细</div>
               <div class="text-xs text-gray-500">
                 共 {{ historyItemsTotal }} 条 · 第 {{ historyItemsPage }} / {{ historyItemsTotalPages }} 页
+              </div>
+            </div>
+            <div v-if="historyItemsStats" class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+              <div class="rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-gray-700">
+                转人工 {{ historyItemsStats.handoff_count ?? '--' }}
+              </div>
+              <div class="rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-gray-700">
+                急诊 {{ historyItemsStats.emergency_count ?? '--' }}
+              </div>
+              <div class="rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-gray-700">
+                转人工率 {{ formatPercent(historyItemsStats.handoff_rate) }}
+              </div>
+              <div class="rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-gray-700">
+                标注准确率 {{ formatPercent(historyItemsStats.handoff_accuracy) }}
               </div>
             </div>
             <div v-if="historyItemsLoading" class="text-sm text-gray-500">样本加载中...</div>
@@ -997,6 +1256,20 @@ onUnmounted(() => {
                     {{ metric.label }} {{ formatScore(getItemMetricValue(item, metric.key)) }}
                   </span>
                 </div>
+                <div class="flex flex-wrap gap-2 text-xs">
+                  <span class="px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200">
+                    分诊 {{ formatTriageLabel(getItemSop(item).triage_level) }}
+                  </span>
+                  <span class="px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200">
+                    转人工 {{ formatBoolFlag(getItemSop(item).handoff_required) }}
+                  </span>
+                  <span
+                    v-if="item.expected_handoff !== null && item.expected_handoff !== undefined"
+                    class="px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200"
+                  >
+                    标注转人工 {{ formatBoolFlag(item.expected_handoff) }}
+                  </span>
+                </div>
                 <details class="bg-gray-50 rounded-lg p-3 text-xs text-gray-600">
                   <summary class="cursor-pointer text-gray-500">查看上下文预览</summary>
                   <div class="mt-2 space-y-2">
@@ -1009,6 +1282,25 @@ onUnmounted(() => {
                     </div>
                     <div v-if="!item.contexts_preview || item.contexts_preview.length === 0">
                       未返回上下文
+                    </div>
+                  </div>
+                </details>
+                <details class="bg-slate-50 rounded-lg p-3 text-xs text-gray-600">
+                  <summary class="cursor-pointer text-gray-500">查看SOP执行链</summary>
+                  <div class="mt-2 space-y-2">
+                    <div>
+                      <span class="text-gray-400">红线命中：</span>
+                      <span class="text-gray-700">
+                        {{ (getItemSop(item).red_flags || []).join('、') || '无' }}
+                      </span>
+                    </div>
+                    <div>
+                      <span class="text-gray-400">转人工原因：</span>
+                      <span class="text-gray-700">{{ getItemSop(item).handoff_reason || '--' }}</span>
+                    </div>
+                    <div>
+                      <span class="text-gray-400">干预摘要：</span>
+                      <span class="text-gray-700">{{ getItemSop(item).intervention_plan?.summary || '--' }}</span>
                     </div>
                   </div>
                 </details>

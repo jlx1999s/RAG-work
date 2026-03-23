@@ -37,6 +37,18 @@ class RAGGraphState(TypedDict, total=False):
     tool_clarify_message: Optional[str]
     pending_tool_name: Optional[str]
     pending_tool_deadline_ms: int
+    # ==================== 医疗SOP链路 ====================
+    medical_structured_output: Dict[str, Any]  # 结构化医疗决策输出
+    extracted_symptoms: List[Dict[str, Any]]   # 抽取的症状信息
+    extracted_vitals: Dict[str, Any]           # 抽取的体征信息
+    patient_profile_snapshot: Dict[str, Any]   # 患者画像快照
+    medical_red_flags: List[str]               # 医疗红线命中项
+    triage_level: str                          # 分诊等级（emergency/urgent/routine/unknown）
+    handoff_required: bool                     # 是否触发转人工
+    handoff_reason: Optional[str]              # 转人工原因
+    intervention_plan: Dict[str, Any]          # 个性化干预草案
+    structured_decision_valid: bool            # 结构化决策是否有效
+    structured_decision_error: Optional[str]   # 结构化决策错误信息
     # ==================== 问题处理 ====================
     subquestions: List[str]            # 扩展的子问题列表
     subquestion_expansion_stats: Dict[str, Any]  # 子问题扩展统计
@@ -101,6 +113,17 @@ def create_initial_rag_state(
         tool_clarify_message="",
         pending_tool_name="",
         pending_tool_deadline_ms=0,
+        medical_structured_output={},
+        extracted_symptoms=[],
+        extracted_vitals={},
+        patient_profile_snapshot={},
+        medical_red_flags=[],
+        triage_level="unknown",
+        handoff_required=False,
+        handoff_reason="",
+        intervention_plan={},
+        structured_decision_valid=False,
+        structured_decision_error="",
         
         # ==================== 问题处理 ====================
         original_question="",

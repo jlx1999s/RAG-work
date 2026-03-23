@@ -237,3 +237,206 @@ def test_get_eval_history_items_should_return_pagination(monkeypatch):
         assert page1.data["stats"]["abstained_count"] == 1
 
     asyncio.run(_scenario())
+
+
+def test_run_single_evaluation_should_include_sop_trace():
+    class _GraphWithSOP:
+        def invoke(self, input_data, context=None):
+            return {
+                "final_answer": "请立即线下就医",
+                "retrieved_docs": [],
+                "handoff_required": True,
+                "handoff_reason": "命中红线",
+                "triage_level": "emergency",
+                "medical_red_flags": ["胸痛"],
+                "structured_decision_valid": True,
+                "structured_decision_error": "",
+                "extracted_symptoms": [{"name": "胸痛"}],
+                "extracted_vitals": {"heart_rate": 120},
+                "intervention_plan": {"summary": "转人工"},
+                "medical_structured_output": {"is_medical": True},
+            }
+
+    result = rag_api._run_single_evaluation(_GraphWithSOP(), "我胸痛", context=None)
+    assert result["sop_trace"]["is_medical"] is True
+    assert result["sop_trace"]["handoff_required"] is True
+    assert result["sop_trace"]["triage_level"] == "emergency"
+    assert result["sop_trace"]["red_flags"] == ["胸痛"]
+    assert result["sop_trace"]["symptoms"] == ["胸痛"]
+
+
+def test_evaluate_payload_should_expose_sop_summary_and_persist_items_when_hidden(monkeypatch):
+    saved_records = []
+
+    class _SOPDummyGraph:
+        def invoke(self, input_data, context=None):
+            question = input_data.get("messages", [{}])[-1].get("content", "")
+            is_emergency = "胸痛" in question
+            return {
+                "final_answer": "建议尽快就医" if is_emergency else "建议继续观察",
+                "retrieved_docs": [],
+                "retrieval_fusion_stats": {},
+                "handoff_required": is_emergency,
+                "handoff_reason": "命中红线" if is_emergency else "",
+                "triage_level": "emergency" if is_emergency else "routine",
+                "medical_red_flags": ["胸痛"] if is_emergency else [],
+                "structured_decision_valid": True,
+                "structured_decision_error": "",
+                "extracted_symptoms": [{"name": "胸痛"}] if is_emergency else [{"name": "咳嗽"}],
+                "extracted_vitals": {},
+                "intervention_plan": {"summary": "转人工" if is_emergency else "生活方式建议"},
+                "medical_structured_output": {"is_medical": True},
+            }
+
+    async def _scenario():
+        monkeypatch.setattr(rag_api, "run_in_threadpool", _run_in_threadpool_immediate)
+        monkeypatch.setattr(rag_api, "get_rag_graph_for_collection", lambda _cid: _SOPDummyGraph())
+        monkeypatch.setattr(rag_api, "_append_eval_history", lambda record: saved_records.append(record))
+        monkeypatch.setattr(rag_api, "_run_ragas_eval", lambda items: {"metrics": {"context_precision": 0.1}, "items": items})
+
+        payload = rag_api.EvalRequest(
+            dataset_jsonl="\n".join(
+                [
+                    '{"question":"我胸痛，呼吸困难","reference":"应急处理","expected_handoff":true}',
+                    '{"question":"轻微咳嗽如何处理","reference":"居家观察","expected_handoff":false}',
+                ]
+            ),
+            collection_id="kb_test",
+            include_item_details=False,
+            enable_ragas=True,
+            ragas_limit=0,
+        )
+        result = await rag_api._evaluate_payload(payload, current_user=1)
+        assert "error" not in result
+        assert result["item_details_included"] is False
+        assert result["items"] == []
+        assert result["items_count"] == 2
+        assert result["sop_summary"]["handoff_required_count"] == 1
+        assert result["sop_summary"]["expected_handoff_count"] == 2
+        assert result["sop_summary"]["handoff_accuracy"] == 1.0
+        assert saved_records, "应保存评测历史"
+        history_items = saved_records[0]["result"]["items"]
+        assert len(history_items) == 2
+        assert "contexts" not in history_items[0]
+        assert history_items[0]["sop"]["handoff_required"] is True
+
+    asyncio.run(_scenario())
+
+
+def test_evaluate_payload_should_include_quality_gates_baseline_and_slices(monkeypatch):
+    saved_records = []
+
+    class _EvalBestPracticeGraph:
+        def invoke(self, input_data, context=None):
+            question = input_data.get("messages", [{}])[-1].get("content", "")
+            if "胸痛" in question:
+                return {
+                    "final_answer": "建议立即急诊就医",
+                    "retrieved_docs": [
+                        {"page_content": "胸痛伴呼吸困难需要紧急就医", "metadata": {"source": "vector"}}
+                    ],
+                    "retrieval_fusion_stats": {"vector_docs": 1},
+                    "handoff_required": True,
+                    "handoff_reason": "命中急危重症红线",
+                    "triage_level": "emergency",
+                    "medical_red_flags": ["胸痛", "呼吸困难"],
+                    "structured_decision_valid": True,
+                    "medical_structured_output": {"is_medical": True},
+                    "extracted_symptoms": [{"name": "胸痛"}],
+                    "intervention_plan": {"summary": "转人工"}
+                }
+            return {
+                "final_answer": "建议规律作息并复诊",
+                "retrieved_docs": [
+                    {"page_content": "轻微咳嗽可先观察，若加重需就医", "metadata": {"source": "vector"}}
+                ],
+                "retrieval_fusion_stats": {"vector_docs": 1},
+                "handoff_required": False,
+                "handoff_reason": "",
+                "triage_level": "routine",
+                "medical_red_flags": [],
+                "structured_decision_valid": True,
+                "medical_structured_output": {"is_medical": True},
+                "extracted_symptoms": [{"name": "咳嗽"}],
+                "intervention_plan": {"summary": "居家管理"}
+            }
+
+    async def _scenario():
+        monkeypatch.setattr(rag_api, "run_in_threadpool", _run_in_threadpool_immediate)
+        monkeypatch.setattr(rag_api, "get_rag_graph_for_collection", lambda _cid: _EvalBestPracticeGraph())
+        monkeypatch.setattr(rag_api, "_append_eval_history", lambda record: saved_records.append(record))
+        monkeypatch.setattr(
+            rag_api,
+            "_load_eval_history",
+            lambda: [
+                {
+                    "id": "baseline-1",
+                    "user_id": "1",
+                    "created_at": 1000,
+                    "dataset_name": "med_eval",
+                    "collection_id": "kb_test",
+                    "retrieval_mode": "vector_only",
+                    "run_tag": "baseline",
+                    "result": {
+                        "run": {
+                            "quality_summary": {
+                                "context_precision": 0.2,
+                                "context_recall": 0.2,
+                                "faithfulness": 0.4,
+                                "answer_relevancy": 0.4
+                            },
+                            "stability_summary": {"error_rate": 0.2, "abstained_answer_rate": 0.3},
+                            "sop_summary": {"handoff_rate": 0.2, "handoff_accuracy": 0.5},
+                            "performance_summary": {"p95_latency_ms": 3000, "avg_latency_ms": 2000},
+                            "retrieval_summary": {"context_presence_rate": 0.5}
+                        }
+                    }
+                }
+            ],
+        )
+
+        def _fake_ragas_eval(items):
+            for item in items:
+                item["metrics"] = {
+                    "context_precision": 0.8,
+                    "context_recall": 0.8,
+                    "answer_relevancy": 0.8,
+                    "faithfulness": 0.8,
+                }
+            return {
+                "metrics": {
+                    "context_precision": 0.8,
+                    "context_recall": 0.8,
+                    "answer_relevancy": 0.8,
+                    "faithfulness": 0.8,
+                },
+                "items": items,
+            }
+
+        monkeypatch.setattr(rag_api, "_run_ragas_eval", _fake_ragas_eval)
+
+        payload = rag_api.EvalRequest(
+            dataset_jsonl="\n".join(
+                [
+                    '{"question":"我胸痛且呼吸困难","reference":"应急处理","expected_handoff":true,"expected_contexts":["胸痛伴呼吸困难需要紧急就医"],"expected_sources":["vector"],"query_type":"triage","difficulty":"hard","risk_level":"high"}',
+                    '{"question":"轻微咳嗽怎么办","reference":"居家观察","expected_handoff":false,"expected_contexts":["轻微咳嗽可先观察"],"expected_sources":["vector"],"query_type":"followup","difficulty":"easy","risk_level":"low"}',
+                ]
+            ),
+            collection_id="kb_test",
+            dataset_name="med_eval",
+            retrieval_mode="vector_only",
+            enable_ragas=True,
+            ragas_limit=0,
+        )
+        result = await rag_api._evaluate_payload(payload, current_user=1)
+        assert "error" not in result
+        assert result["quality_gate_summary"]["overall_status"] in {"pass", "fail"}
+        assert result["baseline_comparison"]["found"] is True
+        assert "faithfulness" in result["baseline_comparison"]["deltas"]
+        assert result["slice_summary"]["risk_level"]["high"]["count"] == 1
+        assert result["retrieval_summary"]["labeled_context_count"] == 2
+        assert result["retrieval_summary"]["labeled_source_count"] == 2
+        assert result["items"][0]["retrieval_label_eval"]["gold_context_hit"] is True
+        assert saved_records, "应保存评测历史"
+
+    asyncio.run(_scenario())

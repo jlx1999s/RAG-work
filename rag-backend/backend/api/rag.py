@@ -33,6 +33,7 @@ router = APIRouter(
 logger = get_logger(__name__)
 eval_tasks: Dict[str, Dict[str, Any]] = {}
 EVAL_TASK_RETENTION_SECONDS = int(os.getenv("RAG_EVAL_TASK_RETENTION_SECONDS", "3600"))
+EVAL_CONTEXT_OVERLAP_HIT_THRESHOLD = float(os.getenv("RAG_EVAL_CONTEXT_OVERLAP_HIT_THRESHOLD", "0.3"))
 
 class EvalRequest(BaseModel):
     dataset_jsonl: str
@@ -139,6 +140,59 @@ def _safe_float(value: Any) -> Optional[float]:
         return None
 
 
+def _safe_int(value: Any) -> Optional[int]:
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
+def _to_optional_bool(value: Any) -> Optional[bool]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+        return None
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "y", "是"}:
+        return True
+    if text in {"false", "0", "no", "n", "否"}:
+        return False
+    return None
+
+
+def _normalize_text_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        result: List[str] = []
+        for item in value:
+            text = _normalize_text(item)
+            if text:
+                result.append(text)
+        return result
+    text = _normalize_text(value)
+    if not text:
+        return []
+    if text.startswith("["):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        except Exception:
+            pass
+    if "||" in text:
+        return [part.strip() for part in text.split("||") if part.strip()]
+    return [text]
+
+
 def _safe_divide(numerator: float, denominator: float) -> Optional[float]:
     if denominator == 0:
         return None
@@ -177,6 +231,57 @@ def _aggregate_fusion_stats(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     return summary
 
 
+def _evaluate_retrieval_labels(item: Dict[str, Any]) -> Dict[str, Any]:
+    expected_contexts = _normalize_text_list(item.get("gold_contexts"))
+    expected_sources = _normalize_text_list(item.get("gold_sources"))
+    contexts = item.get("contexts") or []
+    contexts_text = [str(ctx or "") for ctx in contexts if str(ctx or "").strip()]
+    retrieval_sources = item.get("retrieval_sources") or {}
+    actual_source_names = set(str(name).lower() for name in retrieval_sources.keys())
+
+    metrics = {
+        "has_gold_contexts": bool(expected_contexts),
+        "has_gold_sources": bool(expected_sources),
+        "gold_context_hit": None,
+        "gold_source_hit": None,
+        "gold_context_match_ratio": None,
+        "gold_source_match_ratio": None
+    }
+
+    if expected_sources:
+        expected_source_names = [name.lower() for name in expected_sources]
+        hit_count = sum(1 for name in expected_source_names if name in actual_source_names)
+        metrics["gold_source_match_ratio"] = _safe_float(_safe_divide(hit_count, len(expected_source_names)))
+        metrics["gold_source_hit"] = hit_count > 0
+
+    if expected_contexts:
+        if not contexts_text:
+            metrics["gold_context_hit"] = False
+            metrics["gold_context_match_ratio"] = 0.0
+        else:
+            expected_hits = 0
+            for expected_context in expected_contexts:
+                expected_tokens = _tokenize_for_overlap(expected_context)
+                if not expected_tokens:
+                    continue
+                best_ratio = 0.0
+                for context_text in contexts_text:
+                    context_tokens = _tokenize_for_overlap(context_text)
+                    if not context_tokens:
+                        continue
+                    overlap = len(expected_tokens & context_tokens)
+                    ratio = overlap / max(len(expected_tokens), 1)
+                    if ratio > best_ratio:
+                        best_ratio = ratio
+                if best_ratio >= EVAL_CONTEXT_OVERLAP_HIT_THRESHOLD:
+                    expected_hits += 1
+            match_ratio = _safe_float(_safe_divide(expected_hits, len(expected_contexts)))
+            metrics["gold_context_match_ratio"] = match_ratio
+            metrics["gold_context_hit"] = bool(match_ratio and match_ratio > 0)
+
+    return metrics
+
+
 def _build_retrieval_summary(items: List[Dict[str, Any]], fusion_stats_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     total = len(items)
     if total == 0:
@@ -186,10 +291,31 @@ def _build_retrieval_summary(items: List[Dict[str, Any]], fusion_stats_rows: Lis
     no_context_count = sum(1 for count in contexts_counts if count == 0)
     with_context_count = total - no_context_count
     source_counter: Dict[str, int] = {}
+    labeled_context_count = 0
+    labeled_context_hit_count = 0
+    labeled_source_count = 0
+    labeled_source_hit_count = 0
+    context_match_ratios: List[float] = []
+    source_match_ratios: List[float] = []
     for item in items:
         for source_name, source_count in (item.get("retrieval_sources") or {}).items():
             if isinstance(source_count, int):
                 source_counter[source_name] = source_counter.get(source_name, 0) + source_count
+        label_eval = item.get("retrieval_label_eval") or {}
+        if bool(label_eval.get("has_gold_contexts")):
+            labeled_context_count += 1
+            if bool(label_eval.get("gold_context_hit")):
+                labeled_context_hit_count += 1
+            ratio = _safe_float(label_eval.get("gold_context_match_ratio"))
+            if ratio is not None:
+                context_match_ratios.append(ratio)
+        if bool(label_eval.get("has_gold_sources")):
+            labeled_source_count += 1
+            if bool(label_eval.get("gold_source_hit")):
+                labeled_source_hit_count += 1
+            ratio = _safe_float(label_eval.get("gold_source_match_ratio"))
+            if ratio is not None:
+                source_match_ratios.append(ratio)
     return {
         "total_items": total,
         "with_context_count": with_context_count,
@@ -199,7 +325,21 @@ def _build_retrieval_summary(items: List[Dict[str, Any]], fusion_stats_rows: Lis
         "avg_context_chars_per_item": round(sum(context_char_lengths) / total, 2),
         "p95_contexts_per_item": _percentile([float(v) for v in contexts_counts], 0.95),
         "source_distribution": source_counter,
-        "fusion_summary": _aggregate_fusion_stats(fusion_stats_rows)
+        "fusion_summary": _aggregate_fusion_stats(fusion_stats_rows),
+        "labeled_context_count": labeled_context_count,
+        "labeled_context_hit_rate": _safe_float(_safe_divide(labeled_context_hit_count, labeled_context_count))
+        if labeled_context_count > 0
+        else None,
+        "avg_gold_context_match_ratio": round(sum(context_match_ratios) / len(context_match_ratios), 4)
+        if context_match_ratios
+        else None,
+        "labeled_source_count": labeled_source_count,
+        "labeled_source_hit_rate": _safe_float(_safe_divide(labeled_source_hit_count, labeled_source_count))
+        if labeled_source_count > 0
+        else None,
+        "avg_gold_source_match_ratio": round(sum(source_match_ratios) / len(source_match_ratios), 4)
+        if source_match_ratios
+        else None
     }
 
 
@@ -238,6 +378,299 @@ def _build_stability_summary(items: List[Dict[str, Any]]) -> Dict[str, Any]:
         "empty_answer_rate": _safe_float(_safe_divide(empty_answer, total)),
         "abstained_answer_count": abstained_answer,
         "abstained_answer_rate": _safe_float(_safe_divide(abstained_answer, total))
+    }
+
+
+def _build_sop_summary(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    total = len(items)
+    if total == 0:
+        return {"total_items": 0}
+
+    medical_count = 0
+    handoff_count = 0
+    structured_valid_count = 0
+    red_flag_total = 0
+    triage_distribution: Dict[str, int] = {}
+    expected_handoff_total = 0
+    handoff_correct_count = 0
+    handoff_false_negative = 0
+    handoff_false_positive = 0
+
+    for item in items:
+        sop = item.get("sop") or {}
+        is_medical = bool(sop.get("is_medical"))
+        if is_medical:
+            medical_count += 1
+        handoff_required = bool(sop.get("handoff_required"))
+        if handoff_required:
+            handoff_count += 1
+        if bool(sop.get("structured_decision_valid")):
+            structured_valid_count += 1
+        red_flags = sop.get("red_flags") or []
+        red_flag_total += len(red_flags) if isinstance(red_flags, list) else 0
+        triage_level = _normalize_text(sop.get("triage_level")) or "unknown"
+        triage_distribution[triage_level] = triage_distribution.get(triage_level, 0) + 1
+
+        expected_handoff = item.get("expected_handoff")
+        if isinstance(expected_handoff, bool):
+            expected_handoff_total += 1
+            correct = handoff_required == expected_handoff
+            if correct:
+                handoff_correct_count += 1
+            elif expected_handoff:
+                handoff_false_negative += 1
+            else:
+                handoff_false_positive += 1
+
+    return {
+        "total_items": total,
+        "medical_item_count": medical_count,
+        "medical_item_rate": _safe_float(_safe_divide(medical_count, total)),
+        "handoff_required_count": handoff_count,
+        "handoff_rate": _safe_float(_safe_divide(handoff_count, total)),
+        "structured_decision_valid_count": structured_valid_count,
+        "structured_decision_valid_rate": _safe_float(_safe_divide(structured_valid_count, total)),
+        "avg_red_flags_per_item": round(red_flag_total / total, 4),
+        "triage_distribution": triage_distribution,
+        "expected_handoff_count": expected_handoff_total,
+        "handoff_accuracy": _safe_float(_safe_divide(handoff_correct_count, expected_handoff_total))
+        if expected_handoff_total > 0
+        else None,
+        "handoff_false_negative_count": handoff_false_negative,
+        "handoff_false_positive_count": handoff_false_positive,
+        "handoff_recall": _safe_float(
+            _safe_divide(
+                expected_handoff_total - handoff_false_negative,
+                expected_handoff_total
+            )
+        )
+        if expected_handoff_total > 0
+        else None
+    }
+
+
+def _build_answer_overlap_summary(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    total = len(items)
+    if total == 0:
+        return {"total_items": 0}
+    precision_scores: List[float] = []
+    recall_scores: List[float] = []
+    f1_scores: List[float] = []
+    covered_count = 0
+    for item in items:
+        reference = _normalize_text(item.get("reference"))
+        answer = _normalize_text(item.get("answer"))
+        ref_tokens = _tokenize_for_overlap(reference)
+        ans_tokens = _tokenize_for_overlap(answer)
+        if not ref_tokens or not ans_tokens:
+            continue
+        overlap = len(ref_tokens & ans_tokens)
+        precision = overlap / max(len(ans_tokens), 1)
+        recall = overlap / max(len(ref_tokens), 1)
+        f1 = 0.0 if (precision + recall) == 0 else (2 * precision * recall / (precision + recall))
+        precision_scores.append(precision)
+        recall_scores.append(recall)
+        f1_scores.append(f1)
+        if recall > 0:
+            covered_count += 1
+    return {
+        "total_items": total,
+        "evaluated_items": len(f1_scores),
+        "answer_overlap_coverage_rate": _safe_float(_safe_divide(covered_count, total)),
+        "avg_answer_overlap_precision": round(sum(precision_scores) / len(precision_scores), 4) if precision_scores else None,
+        "avg_answer_overlap_recall": round(sum(recall_scores) / len(recall_scores), 4) if recall_scores else None,
+        "avg_answer_overlap_f1": round(sum(f1_scores) / len(f1_scores), 4) if f1_scores else None
+    }
+
+
+def _build_slice_summary(items: List[Dict[str, Any]], field_name: str) -> Dict[str, Any]:
+    buckets: Dict[str, List[Dict[str, Any]]] = {}
+    for item in items:
+        field_value = _normalize_text(item.get(field_name)) or "unknown"
+        buckets.setdefault(field_value, []).append(item)
+    summary: Dict[str, Any] = {}
+    for bucket, bucket_items in buckets.items():
+        total = len(bucket_items)
+        if total == 0:
+            continue
+        failed = sum(1 for item in bucket_items if item.get("status") == "error")
+        handoff = sum(1 for item in bucket_items if bool((item.get("sop") or {}).get("handoff_required")))
+        latencies = [
+            float(item.get("latency_ms"))
+            for item in bucket_items
+            if isinstance(item.get("latency_ms"), (int, float))
+        ]
+        summary[bucket] = {
+            "count": total,
+            "error_rate": _safe_float(_safe_divide(failed, total)),
+            "handoff_rate": _safe_float(_safe_divide(handoff, total)),
+            "avg_latency_ms": round(sum(latencies) / len(latencies), 2) if latencies else None
+        }
+    return summary
+
+
+def _extract_metric_for_delta(payload: Dict[str, Any], path: List[str]) -> Optional[float]:
+    current: Any = payload
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return _safe_float(current)
+
+
+def _build_baseline_comparison(
+    current_user: Any,
+    payload: EvalRequest,
+    response_payload: Dict[str, Any]
+) -> Dict[str, Any]:
+    rows = _load_eval_history()
+    user_rows = [row for row in rows if str(row.get("user_id")) == str(current_user)]
+    if not user_rows:
+        return {"found": False}
+    target_dataset = (payload.dataset_name or "").strip().lower()
+    target_collection = (payload.collection_id or "").strip().lower()
+    target_mode = (payload.retrieval_mode or "").strip().lower()
+    candidates: List[Dict[str, Any]] = []
+    for row in user_rows:
+        row_result = row.get("result") or {}
+        row_dataset = _normalize_text(row.get("dataset_name")).lower()
+        row_collection = _normalize_text(row.get("collection_id")).lower()
+        row_mode = _normalize_text(row.get("retrieval_mode")).lower()
+        if target_dataset and row_dataset and row_dataset != target_dataset:
+            continue
+        if target_collection and row_collection and row_collection != target_collection:
+            continue
+        if target_mode and row_mode and row_mode != target_mode:
+            continue
+        if not isinstance(row_result, dict):
+            continue
+        candidates.append(row)
+    if not candidates:
+        return {"found": False}
+    baseline_row = max(candidates, key=lambda r: float(r.get("created_at") or 0))
+    baseline_result = baseline_row.get("result") or {}
+    metric_paths = {
+        "context_precision": ["run", "quality_summary", "context_precision"],
+        "context_recall": ["run", "quality_summary", "context_recall"],
+        "faithfulness": ["run", "quality_summary", "faithfulness"],
+        "answer_relevancy": ["run", "quality_summary", "answer_relevancy"],
+        "error_rate": ["run", "stability_summary", "error_rate"],
+        "abstained_answer_rate": ["run", "stability_summary", "abstained_answer_rate"],
+        "handoff_rate": ["run", "sop_summary", "handoff_rate"],
+        "handoff_accuracy": ["run", "sop_summary", "handoff_accuracy"],
+        "p95_latency_ms": ["run", "performance_summary", "p95_latency_ms"],
+        "avg_latency_ms": ["run", "performance_summary", "avg_latency_ms"],
+        "context_presence_rate": ["run", "retrieval_summary", "context_presence_rate"]
+    }
+    deltas: Dict[str, Any] = {}
+    for name, path in metric_paths.items():
+        current_value = _extract_metric_for_delta(response_payload, path)
+        baseline_value = _extract_metric_for_delta(baseline_result, path)
+        if current_value is None or baseline_value is None:
+            continue
+        deltas[name] = {
+            "current": current_value,
+            "baseline": baseline_value,
+            "delta": round(current_value - baseline_value, 6)
+        }
+    return {
+        "found": True,
+        "baseline_id": baseline_row.get("id"),
+        "baseline_created_at": baseline_row.get("created_at"),
+        "baseline_dataset_name": baseline_row.get("dataset_name"),
+        "baseline_run_tag": baseline_row.get("run_tag"),
+        "deltas": deltas
+    }
+
+
+def _build_quality_gate_summary(
+    quality_summary: Dict[str, Any],
+    retrieval_summary: Dict[str, Any],
+    performance_summary: Dict[str, Any],
+    stability_summary: Dict[str, Any],
+    sop_summary: Dict[str, Any]
+) -> Dict[str, Any]:
+    rules = [
+        {
+            "key": "error_rate",
+            "label": "错误率",
+            "value": _safe_float(stability_summary.get("error_rate")),
+            "threshold": _safe_float(os.getenv("RAG_EVAL_GATE_MAX_ERROR_RATE", "0.05")),
+            "operator": "<="
+        },
+        {
+            "key": "abstained_answer_rate",
+            "label": "拒答率",
+            "value": _safe_float(stability_summary.get("abstained_answer_rate")),
+            "threshold": _safe_float(os.getenv("RAG_EVAL_GATE_MAX_ABSTAINED_RATE", "0.35")),
+            "operator": "<="
+        },
+        {
+            "key": "context_presence_rate",
+            "label": "上下文覆盖率",
+            "value": _safe_float(retrieval_summary.get("context_presence_rate")),
+            "threshold": _safe_float(os.getenv("RAG_EVAL_GATE_MIN_CONTEXT_PRESENCE_RATE", "0.8")),
+            "operator": ">="
+        },
+        {
+            "key": "faithfulness",
+            "label": "事实一致性",
+            "value": _safe_float(quality_summary.get("faithfulness")),
+            "threshold": _safe_float(os.getenv("RAG_EVAL_GATE_MIN_FAITHFULNESS", "0.65")),
+            "operator": ">="
+        },
+        {
+            "key": "p95_latency_ms",
+            "label": "P95延迟(ms)",
+            "value": _safe_float(performance_summary.get("p95_latency_ms")),
+            "threshold": _safe_float(os.getenv("RAG_EVAL_GATE_MAX_P95_LATENCY_MS", "25000")),
+            "operator": "<="
+        },
+        {
+            "key": "handoff_recall",
+            "label": "转人工召回率",
+            "value": _safe_float(sop_summary.get("handoff_recall")),
+            "threshold": _safe_float(os.getenv("RAG_EVAL_GATE_MIN_HANDOFF_RECALL", "0.95")),
+            "operator": ">="
+        }
+    ]
+    checks: List[Dict[str, Any]] = []
+    fail_count = 0
+    pass_count = 0
+    skip_count = 0
+    for rule in rules:
+        value = rule.get("value")
+        threshold = rule.get("threshold")
+        operator = rule.get("operator")
+        status = "skipped"
+        passed = None
+        if value is not None and threshold is not None:
+            if operator == "<=":
+                passed = value <= threshold
+            else:
+                passed = value >= threshold
+            status = "pass" if passed else "fail"
+        if status == "pass":
+            pass_count += 1
+        elif status == "fail":
+            fail_count += 1
+        else:
+            skip_count += 1
+        checks.append({
+            "key": rule["key"],
+            "label": rule["label"],
+            "operator": operator,
+            "value": value,
+            "threshold": threshold,
+            "status": status
+        })
+    overall = "pass" if fail_count == 0 else "fail"
+    return {
+        "overall_status": overall,
+        "pass_count": pass_count,
+        "fail_count": fail_count,
+        "skip_count": skip_count,
+        "checks": checks
     }
 
 
@@ -284,12 +717,40 @@ def _run_single_evaluation(
     answer = ""
     contexts: List[Any] = []
     fusion_stats: Dict[str, Any] = {}
+    sop_trace: Dict[str, Any] = {}
     if isinstance(output, dict):
         answer = _normalize_text(output.get("final_answer"))
         if not answer:
             answer = _extract_answer_from_messages(output.get("messages") or [])
         contexts = output.get("retrieved_docs") or []
         fusion_stats = output.get("retrieval_fusion_stats") or {}
+        medical_structured_output = output.get("medical_structured_output") or {}
+        symptoms_raw = output.get("extracted_symptoms") or []
+        symptom_names: List[str] = []
+        if isinstance(symptoms_raw, list):
+            for item in symptoms_raw:
+                if isinstance(item, dict):
+                    text = _normalize_text(item.get("name"))
+                else:
+                    text = _normalize_text(item)
+                if text:
+                    symptom_names.append(text)
+        sop_trace = {
+            "is_medical": bool(
+                medical_structured_output.get("is_medical")
+                if isinstance(medical_structured_output, dict)
+                else False
+            ),
+            "handoff_required": bool(output.get("handoff_required")),
+            "handoff_reason": _normalize_text(output.get("handoff_reason")),
+            "triage_level": _normalize_text(output.get("triage_level")) or "unknown",
+            "red_flags": [str(flag) for flag in (output.get("medical_red_flags") or []) if str(flag).strip()],
+            "structured_decision_valid": bool(output.get("structured_decision_valid")),
+            "structured_decision_error": _normalize_text(output.get("structured_decision_error")),
+            "symptoms": symptom_names[:12],
+            "vitals": output.get("extracted_vitals") or {},
+            "intervention_plan": output.get("intervention_plan") or {}
+        }
     else:
         answer = _normalize_text(output)
     normalized_contexts = []
@@ -314,6 +775,15 @@ def _run_single_evaluation(
             content_text = str(ctx)
             normalized_contexts.append(content_text)
             contexts_total_chars += len(content_text)
+
+    if not retrieval_sources and isinstance(output, dict):
+        answer_sources = output.get("answer_sources") or []
+        for source in answer_sources:
+            if not isinstance(source, dict):
+                continue
+            source_name = str(source.get("retrieval_mode") or "unknown")
+            retrieval_sources[source_name] = retrieval_sources.get(source_name, 0) + 1
+
     elapsed_ms = int((time.time() - start_time) * 1000)
     return {
         "answer": answer,
@@ -321,8 +791,23 @@ def _run_single_evaluation(
         "retrieval_fusion_stats": fusion_stats,
         "retrieval_sources": retrieval_sources,
         "contexts_total_chars": contexts_total_chars,
-        "latency_ms": elapsed_ms
+        "latency_ms": elapsed_ms,
+        "sop_trace": sop_trace
     }
+
+
+def _compact_items_for_history(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    compacted: List[Dict[str, Any]] = []
+    for item in items:
+        compact = dict(item or {})
+        contexts_preview = compact.get("contexts_preview")
+        if not isinstance(contexts_preview, list) or not contexts_preview:
+            contexts = compact.get("contexts") or []
+            contexts_preview = [str(ctx)[:300] for ctx in contexts[:3]]
+        compact["contexts_preview"] = contexts_preview
+        compact.pop("contexts", None)
+        compacted.append(compact)
+    return compacted
 
 
 def _tokenize_for_overlap(text: str) -> set[str]:
@@ -552,6 +1037,29 @@ async def _evaluate_payload(payload: EvalRequest, current_user: int) -> Dict[str
     for row in rows:
         question = _normalize_text(row.get("question") or row.get("query"))
         reference = _resolve_reference_text(row)
+        expected_handoff = _to_optional_bool(
+            row.get("expected_handoff")
+            if "expected_handoff" in row
+            else row.get("expect_handoff")
+        )
+        expected_triage_level = _normalize_text(
+            row.get("expected_triage_level")
+            if "expected_triage_level" in row
+            else row.get("triage_level")
+        ) or None
+        gold_contexts = _normalize_text_list(
+            row.get("gold_contexts")
+            if "gold_contexts" in row
+            else row.get("expected_contexts")
+        )
+        gold_sources = _normalize_text_list(
+            row.get("gold_sources")
+            if "gold_sources" in row
+            else row.get("expected_sources")
+        )
+        query_type = _normalize_text(row.get("query_type") or row.get("intent_type")) or None
+        difficulty = _normalize_text(row.get("difficulty")) or None
+        risk_level = _normalize_text(row.get("risk_level") or row.get("medical_risk_level")) or None
         if not question:
             continue
         item_record: Dict[str, Any] = {
@@ -567,6 +1075,15 @@ async def _evaluate_payload(payload: EvalRequest, current_user: int) -> Dict[str
             "contexts_preview": [],
             "retrieval_sources": {},
             "retrieval_fusion_stats": {},
+            "expected_handoff": expected_handoff,
+            "expected_triage_level": expected_triage_level,
+            "gold_contexts": gold_contexts,
+            "gold_sources": gold_sources,
+            "query_type": query_type,
+            "difficulty": difficulty,
+            "risk_level": risk_level,
+            "sop": {},
+            "retrieval_label_eval": {},
             "cache": {
                 "enabled": payload.cache_enabled,
                 "namespace": payload.cache_namespace,
@@ -587,8 +1104,21 @@ async def _evaluate_payload(payload: EvalRequest, current_user: int) -> Dict[str
                 "contexts_total_chars": int(eval_result.get("contexts_total_chars") or 0),
                 "contexts_preview": [str(c)[:300] for c in contexts[:3]],
                 "retrieval_sources": eval_result.get("retrieval_sources") or {},
-                "retrieval_fusion_stats": fusion_stats
+                "retrieval_fusion_stats": fusion_stats,
+                "sop": eval_result.get("sop_trace") or {}
             })
+            if isinstance(item_record.get("expected_handoff"), bool):
+                handoff_required = bool((item_record.get("sop") or {}).get("handoff_required"))
+                item_record["sop"]["handoff_expected"] = item_record["expected_handoff"]
+                item_record["sop"]["handoff_correct"] = handoff_required == item_record["expected_handoff"]
+            if item_record.get("expected_triage_level"):
+                triage_level = _normalize_text((item_record.get("sop") or {}).get("triage_level")) or None
+                expected_level = _normalize_text(item_record.get("expected_triage_level")) or None
+                item_record["sop"]["triage_expected"] = expected_level
+                item_record["sop"]["triage_correct"] = bool(
+                    triage_level and expected_level and triage_level.lower() == expected_level.lower()
+                )
+            item_record["retrieval_label_eval"] = _evaluate_retrieval_labels(item_record)
         except Exception as exc:
             logger.error(f"单条评测失败: {exc}")
             item_record.update({
@@ -653,6 +1183,20 @@ async def _evaluate_payload(payload: EvalRequest, current_user: int) -> Dict[str
     retrieval_summary = _build_retrieval_summary(evaluated_items, fusion_stats_rows)
     performance_summary = _build_performance_summary(evaluated_items, elapsed_ms)
     stability_summary = _build_stability_summary(evaluated_items)
+    sop_summary = _build_sop_summary(evaluated_items)
+    answer_overlap_summary = _build_answer_overlap_summary(evaluated_items)
+    slice_summary = {
+        "query_type": _build_slice_summary(evaluated_items, "query_type"),
+        "difficulty": _build_slice_summary(evaluated_items, "difficulty"),
+        "risk_level": _build_slice_summary(evaluated_items, "risk_level")
+    }
+    quality_gate_summary = _build_quality_gate_summary(
+        quality_summary=metrics_result.get("metrics", {}),
+        retrieval_summary=retrieval_summary,
+        performance_summary=performance_summary,
+        stability_summary=stability_summary,
+        sop_summary=sop_summary
+    )
     performance_summary.update({
         "retrieval_generation_elapsed_ms": retrieval_elapsed_ms,
         "ragas_elapsed_ms": ragas_elapsed_ms,
@@ -696,9 +1240,14 @@ async def _evaluate_payload(payload: EvalRequest, current_user: int) -> Dict[str
         "retrieval_summary": retrieval_summary,
         "performance_summary": performance_summary,
         "stability_summary": stability_summary,
+        "sop_summary": sop_summary,
+        "answer_overlap_summary": answer_overlap_summary,
+        "slice_summary": slice_summary,
+        "quality_gate_summary": quality_gate_summary,
         "cost_summary": cost_summary,
         "cache_summary": cache_summary
     }
+    include_items = bool(payload.include_item_details)
     response_payload = {
         "run": run_report,
         "summary": metrics_result.get("metrics", {}),
@@ -706,14 +1255,27 @@ async def _evaluate_payload(payload: EvalRequest, current_user: int) -> Dict[str
         "retrieval_summary": retrieval_summary,
         "performance_summary": performance_summary,
         "stability_summary": stability_summary,
+        "sop_summary": sop_summary,
+        "answer_overlap_summary": answer_overlap_summary,
+        "slice_summary": slice_summary,
+        "quality_gate_summary": quality_gate_summary,
         "cost_summary": cost_summary,
         "cache_summary": cache_summary,
-        "items": evaluated_items if payload.include_item_details else [],
+        "items": evaluated_items if include_items else [],
+        "items_count": len(evaluated_items),
+        "item_details_included": include_items,
         "elapsed_ms": elapsed_ms,
         "total": len(evaluated_items),
         "warning": warning_text
     }
+    baseline_comparison = _build_baseline_comparison(current_user, payload, response_payload)
+    response_payload["baseline_comparison"] = baseline_comparison
+    response_payload["run"]["baseline_comparison"] = baseline_comparison
     try:
+        history_result = dict(response_payload)
+        history_result["items"] = _compact_items_for_history(evaluated_items)
+        history_result["item_details_included"] = True
+        history_result["items_count"] = len(evaluated_items)
         record = {
             "id": str(uuid4()),
             "created_at": time.time(),
@@ -731,7 +1293,7 @@ async def _evaluate_payload(payload: EvalRequest, current_user: int) -> Dict[str
             "cache_enabled": payload.cache_enabled,
             "cache_namespace": payload.cache_namespace,
             "limit": payload.limit or 0,
-            "result": response_payload
+            "result": history_result
         }
         _append_eval_history(record)
     except Exception as exc:
@@ -924,6 +1486,24 @@ async def get_eval_history_items(
     contexts_counts = [int(item.get("contexts_count") or 0) for item in all_items]
     error_count = sum(1 for item in all_items if item.get("status") == "error")
     abstained_count = sum(1 for item in all_items if _is_abstained_answer(item.get("answer")))
+    handoff_count = 0
+    emergency_count = 0
+    expected_handoff_total = 0
+    handoff_correct_count = 0
+    red_flag_total = 0
+    for item in all_items:
+        sop = item.get("sop") or {}
+        if bool(sop.get("handoff_required")):
+            handoff_count += 1
+        if _normalize_text(sop.get("triage_level")).lower() == "emergency":
+            emergency_count += 1
+        red_flags = sop.get("red_flags") or []
+        if isinstance(red_flags, list):
+            red_flag_total += len(red_flags)
+        if isinstance(item.get("expected_handoff"), bool):
+            expected_handoff_total += 1
+            if bool(sop.get("handoff_required")) == bool(item.get("expected_handoff")):
+                handoff_correct_count += 1
 
     return Response.success({
         "history_id": history_id,
@@ -936,6 +1516,14 @@ async def get_eval_history_items(
             "error_count": error_count,
             "abstained_count": abstained_count,
             "avg_latency_ms": round(sum(latencies) / len(latencies), 2) if latencies else None,
-            "avg_contexts_count": round(sum(contexts_counts) / len(contexts_counts), 2) if contexts_counts else None
+            "avg_contexts_count": round(sum(contexts_counts) / len(contexts_counts), 2) if contexts_counts else None,
+            "handoff_count": handoff_count,
+            "emergency_count": emergency_count,
+            "handoff_rate": _safe_float(_safe_divide(handoff_count, total_items)),
+            "avg_red_flags_per_item": round(red_flag_total / total_items, 4) if total_items else None,
+            "expected_handoff_count": expected_handoff_total,
+            "handoff_accuracy": _safe_float(_safe_divide(handoff_correct_count, expected_handoff_total))
+            if expected_handoff_total > 0
+            else None
         }
     })

@@ -175,6 +175,8 @@ class RAGGraph:
 
         # 添加节点
         workflow.add_node("start", self.nodes.start_node)
+        workflow.add_node("structured_medical_parse", self.nodes.structured_medical_parse_node)
+        workflow.add_node("medical_redline_guard", self.nodes.medical_redline_guard_node)
         workflow.add_node("check_retrieval_needed", self.nodes.check_retrieval_needed_node)
         workflow.add_node("check_tool_needed", self.nodes.check_tool_needed_node)  # 新增
         workflow.add_node("tool_calling", self.nodes.tool_calling_node)  # 新增
@@ -184,6 +186,7 @@ class RAGGraph:
         workflow.add_node("vector_db_retrieval", self.nodes.vector_db_retrieval_node)
         workflow.add_node("hybrid_retrieval", self.nodes.hybrid_retrieval_node)
         workflow.add_node("graph_db_retrieval", self.nodes.graph_db_retrieval_node)
+        workflow.add_node("generate_intervention_plan", self.nodes.generate_intervention_plan_node)
         workflow.add_node("generate_answer", self.nodes.generate_answer_node)
 
         # 设置入口点
@@ -197,8 +200,19 @@ class RAGGraph:
 
     def _add_edges(self, workflow: StateGraph) -> None:
         """添加图的边和条件边"""
-        # 开始 -> 优先判断是否需要工具
-        workflow.add_edge("start", "check_tool_needed")
+        # 开始 -> 医疗SOP结构化解析 -> 医疗红线检查
+        workflow.add_edge("start", "structured_medical_parse")
+        workflow.add_edge("structured_medical_parse", "medical_redline_guard")
+
+        # 红线命中则直接转人工/急诊兜底，否则继续标准流程
+        workflow.add_conditional_edges(
+            "medical_redline_guard",
+            self.nodes.route_medical_guard,
+            {
+                "handoff": "direct_answer",
+                "continue": "check_tool_needed"
+            }
+        )
 
         # 是否需要工具的条件边
         workflow.add_conditional_edges(
@@ -237,14 +251,17 @@ class RAGGraph:
             }
         )
 
-        # 向量数据库检索 -> 生成答案
-        workflow.add_edge("vector_db_retrieval", "generate_answer")
+        # 向量数据库检索 -> 干预规划 -> 生成答案
+        workflow.add_edge("vector_db_retrieval", "generate_intervention_plan")
 
-        # 图数据库检索 -> 生成答案
-        workflow.add_edge("graph_db_retrieval", "generate_answer")
+        # 图数据库检索 -> 干预规划 -> 生成答案
+        workflow.add_edge("graph_db_retrieval", "generate_intervention_plan")
 
-        # 融合检索 -> 生成答案
-        workflow.add_edge("hybrid_retrieval", "generate_answer")
+        # 融合检索 -> 干预规划 -> 生成答案
+        workflow.add_edge("hybrid_retrieval", "generate_intervention_plan")
+
+        # 干预规划 -> 生成答案
+        workflow.add_edge("generate_intervention_plan", "generate_answer")
 
         # 直接回答 -> 结束
         workflow.add_edge("direct_answer", END)

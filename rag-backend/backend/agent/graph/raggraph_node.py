@@ -6,7 +6,9 @@ from ..prompts.raggraph_prompt import (
     RAGGraphPrompts,
     RetrievalNeedDecision,
     SubquestionExpansion,
-    ToolSkillDecision
+    ToolSkillDecision,
+    MedicalStructuredDecision,
+    MedicalInterventionPlan
 )
 from langchain_core.messages import AIMessage
 from ...config.log import get_logger
@@ -121,6 +123,12 @@ class RAGNodes:
             os.getenv("RAG_MEDICAL_EMERGENCY_MARKERS"),
             ["胸痛", "呼吸困难", "意识障碍", "昏迷", "抽搐", "大出血", "活动性出血", "持续高热", "高热不退", "stroke", "seizure", "unconscious", "急救", "急诊", "120"]
         )
+        self.medical_sop_enabled = os.getenv("RAG_MEDICAL_SOP_ENABLED", "true").lower() in {"true", "1", "yes", "on"}
+        self.medical_sop_force_handoff_when_uncertain = os.getenv("RAG_MEDICAL_SOP_FORCE_HANDOFF_WHEN_UNCERTAIN", "true").lower() in {"true", "1", "yes", "on"}
+        self.medical_sop_handoff_text = os.getenv(
+            "RAG_MEDICAL_SOP_HANDOFF_TEXT",
+            "检测到潜在医疗风险。为确保安全，请立即联系医生或线下医疗机构进行人工评估。"
+        ).strip()
         self.tool_pending_ttl_seconds = float(os.getenv("RAG_TOOL_PENDING_TTL_SECONDS", "180"))
         self.enable_subquestion_expansion = os.getenv("RAG_ENABLE_SUBQUESTION_EXPANSION", "true").lower() in {"true", "1", "yes", "on"}
         self.subquestion_max_count = int(os.getenv("RAG_SUBQUESTION_MAX_COUNT", "3"))
@@ -559,6 +567,218 @@ class RAGNodes:
         latest = messages[-1]
         return latest.content if hasattr(latest, "content") else str(latest)
 
+    def _extract_patient_profile_snapshot(self, state: RAGGraphState) -> dict:
+        messages = state.get("messages", []) or []
+        combined = "\n".join(
+            (msg.content if hasattr(msg, "content") else str(msg)) for msg in messages[-12:]
+        )
+        text = str(combined or "")
+        profile = {
+            "age": None,
+            "sex": None,
+            "conditions": [],
+            "allergies": [],
+            "medications": []
+        }
+        age_match = re.search(r"(?:年龄|age)[^\d]{0,4}(\d{1,3})", text, re.IGNORECASE)
+        if age_match:
+            age = self._safe_int(age_match.group(1), 0)
+            if 0 < age <= 120:
+                profile["age"] = age
+        if re.search(r"(男|男性|male)", text, re.IGNORECASE):
+            profile["sex"] = "male"
+        elif re.search(r"(女|女性|female)", text, re.IGNORECASE):
+            profile["sex"] = "female"
+
+        condition_markers = ["高血压", "糖尿病", "冠心病", "哮喘", "慢阻肺", "肾病"]
+        allergy_markers = ["过敏", "药物过敏", "青霉素过敏", "头孢过敏"]
+        medication_markers = ["二甲双胍", "胰岛素", "缬沙坦", "氨氯地平", "阿托伐他汀"]
+        profile["conditions"] = [item for item in condition_markers if item in text]
+        profile["allergies"] = [item for item in allergy_markers if item in text]
+        profile["medications"] = [item for item in medication_markers if item in text]
+        return profile
+
+    def _normalize_triage_level(self, value: str) -> str:
+        triage = str(value or "").strip().lower()
+        if triage in {"emergency", "urgent", "routine", "unknown"}:
+            return triage
+        return "unknown"
+
+    def _build_medical_structured_fallback(self, question: str, patient_profile: dict | None = None) -> dict:
+        raw_question = str(question or "")
+        red_flags = [marker for marker in self.medical_emergency_markers if marker.lower() in raw_question.lower()]
+        symptoms = []
+        for marker in self.medical_domain_markers:
+            if marker.lower() in raw_question.lower():
+                symptoms.append(marker)
+        triage_level = "emergency" if red_flags else ("routine" if symptoms else "unknown")
+        handoff_required = bool(red_flags)
+        handoff_reason = "命中急危重症红线" if handoff_required else ""
+        intervention_focus = []
+        if "高血压" in raw_question or "血压" in raw_question:
+            intervention_focus.append("血压管理")
+        if "糖尿病" in raw_question or "血糖" in raw_question:
+            intervention_focus.append("血糖管理")
+        if "饮食" in raw_question:
+            intervention_focus.append("饮食干预")
+        if "运动" in raw_question:
+            intervention_focus.append("运动干预")
+        return {
+            "is_medical": self._is_medical_text(raw_question),
+            "symptoms": symptoms[:10],
+            "vitals": {},
+            "red_flags": red_flags[:10],
+            "triage_level": triage_level,
+            "handoff_required": handoff_required,
+            "handoff_reason": handoff_reason,
+            "intervention_focus": intervention_focus[:8],
+            "reasoning": "fallback规则判定",
+            "patient_profile_snapshot": patient_profile or {}
+        }
+
+    def _normalize_medical_structured_output(self, payload: dict, fallback: dict) -> dict:
+        normalized = dict(fallback)
+        normalized.update(payload or {})
+        symptoms_raw = normalized.get("symptoms") or []
+        symptoms = []
+        if isinstance(symptoms_raw, list):
+            for item in symptoms_raw:
+                text = str(item).strip()
+                if text:
+                    symptoms.append({"name": text, "certainty": 0.8})
+        normalized["symptoms"] = symptoms[:12]
+        red_flags_raw = normalized.get("red_flags") or []
+        if isinstance(red_flags_raw, list):
+            normalized["red_flags"] = [str(item).strip() for item in red_flags_raw if str(item).strip()][:12]
+        else:
+            normalized["red_flags"] = []
+        vitals_raw = normalized.get("vitals")
+        normalized["vitals"] = dict(vitals_raw) if isinstance(vitals_raw, dict) else {}
+        normalized["triage_level"] = self._normalize_triage_level(str(normalized.get("triage_level") or "unknown"))
+        normalized["handoff_required"] = bool(normalized.get("handoff_required"))
+        normalized["handoff_reason"] = str(normalized.get("handoff_reason") or "").strip()
+        focus_raw = normalized.get("intervention_focus") or []
+        if isinstance(focus_raw, list):
+            normalized["intervention_focus"] = [str(item).strip() for item in focus_raw if str(item).strip()][:12]
+        else:
+            normalized["intervention_focus"] = []
+        normalized["is_medical"] = bool(normalized.get("is_medical"))
+        normalized["reasoning"] = str(normalized.get("reasoning") or "").strip()
+        return normalized
+
+    def _build_medical_handoff_answer(self, question: str, red_flags: list[str], handoff_reason: str) -> str:
+        reason_text = handoff_reason or "检测到潜在医疗风险"
+        flags_text = "、".join(red_flags[:5]) if red_flags else "未知风险信号"
+        return (
+            f"{self.medical_sop_handoff_text}\n"
+            f"触发原因：{reason_text}；命中信号：{flags_text}。\n"
+            "请优先进行线下就医评估，本助手暂不提供进一步个体化医疗干预。"
+        )
+
+    def _format_intervention_plan(self, plan: dict) -> str:
+        if not plan:
+            return ""
+        lifestyle = plan.get("lifestyle_actions") or []
+        followup = plan.get("followup_actions") or []
+        escalation = plan.get("escalation_signals") or []
+        cautions = plan.get("medication_cautions") or []
+        lines = [f"摘要: {plan.get('summary') or ''}".strip()]
+        if lifestyle:
+            lines.append("生活方式: " + "；".join(str(item) for item in lifestyle[:5]))
+        if followup:
+            lines.append("随访建议: " + "；".join(str(item) for item in followup[:5]))
+        if escalation:
+            lines.append("升级就医信号: " + "；".join(str(item) for item in escalation[:5]))
+        if cautions:
+            lines.append("用药注意: " + "；".join(str(item) for item in cautions[:5]))
+        return "\n".join(line for line in lines if line.strip())
+
+    def _build_intervention_plan_fallback(
+        self,
+        question: str,
+        structured_output: dict,
+        retrieved_docs: list[RetrievedDocument] | None = None
+    ) -> dict:
+        triage_level = self._normalize_triage_level(structured_output.get("triage_level") or "unknown")
+        focus = [str(item).strip() for item in (structured_output.get("intervention_focus") or []) if str(item).strip()]
+        red_flags = [str(item).strip() for item in (structured_output.get("red_flags") or []) if str(item).strip()]
+        symptoms = structured_output.get("symptoms") or []
+        symptom_names = []
+        for item in symptoms:
+            if isinstance(item, dict):
+                name = str(item.get("name") or "").strip()
+            else:
+                name = str(item).strip()
+            if name:
+                symptom_names.append(name)
+
+        lifestyle_actions = []
+        followup_actions = []
+        escalation_signals = []
+        medication_cautions = []
+
+        if "血压管理" in focus or "高血压" in str(question):
+            lifestyle_actions.append("每日固定时段测量并记录血压，避免熬夜与高盐饮食")
+            followup_actions.append("建议1-2周内复测血压趋势，必要时到心内科/全科门诊复评")
+        if "血糖管理" in focus or "糖尿病" in str(question):
+            lifestyle_actions.append("规律进餐并控制精制糖摄入，结合每周至少150分钟中等强度运动")
+            followup_actions.append("建议按医嘱监测空腹/餐后血糖并在门诊复核")
+        if "饮食干预" in focus and all("饮食" not in item for item in lifestyle_actions):
+            lifestyle_actions.append("采用少油少盐高纤维饮食，逐步建立可持续饮食习惯")
+        if "运动干预" in focus and all("运动" not in item for item in lifestyle_actions):
+            lifestyle_actions.append("根据体能逐步增加运动量，优先快走/骑行等低风险有氧运动")
+
+        if triage_level in {"urgent", "emergency"}:
+            escalation_signals.extend(red_flags[:5] or ["症状持续加重或出现新的危险信号"])
+            followup_actions.append("当前风险较高，建议尽快线下就医进行专业评估")
+        else:
+            escalation_signals.extend([
+                "胸痛、呼吸困难、意识障碍、抽搐等急危重症信号",
+                "症状持续恶化或常规干预48小时无改善"
+            ])
+
+        if any("过敏" in str(item) for item in (structured_output.get("patient_profile_snapshot", {}).get("allergies") or [])):
+            medication_cautions.append("存在过敏史，任何新增药物前需与医生核对过敏风险")
+        if symptom_names:
+            followup_actions.append(f"针对症状（{'、'.join(symptom_names[:4])}）建议进行线下病因评估")
+
+        if not lifestyle_actions:
+            lifestyle_actions = ["保持规律作息、均衡饮食与适度运动，避免自行加药或停药"]
+        if not followup_actions:
+            followup_actions = ["如症状反复或加重，请及时到线下门诊复诊"]
+        if not medication_cautions:
+            medication_cautions = ["处方药调整需由执业医生评估后执行，不建议自行更改用药方案"]
+
+        summary = "基于当前症状与画像生成保守型健康干预建议，优先保障安全与可执行性"
+        if retrieved_docs:
+            summary = f"{summary}（已参考{len(retrieved_docs)}条检索证据）"
+
+        return {
+            "summary": summary,
+            "lifestyle_actions": lifestyle_actions[:6],
+            "followup_actions": followup_actions[:6],
+            "escalation_signals": escalation_signals[:6],
+            "medication_cautions": medication_cautions[:6],
+            "reasoning": "fallback规则生成"
+        }
+
+    def _normalize_intervention_plan(self, payload: dict, fallback: dict) -> dict:
+        normalized = dict(fallback)
+        normalized.update(payload or {})
+        normalized["summary"] = str(normalized.get("summary") or "").strip()
+        normalized["reasoning"] = str(normalized.get("reasoning") or "").strip()
+
+        for list_key in ["lifestyle_actions", "followup_actions", "escalation_signals", "medication_cautions"]:
+            raw_items = normalized.get(list_key) or []
+            if isinstance(raw_items, list):
+                normalized[list_key] = [str(item).strip() for item in raw_items if str(item).strip()][:8]
+            else:
+                normalized[list_key] = []
+
+        if not normalized["summary"]:
+            normalized["summary"] = fallback.get("summary") or "已生成保守型干预建议"
+        return normalized
+
     def _rule_first_retrieval_decision(self, question: str, library: dict | None = None) -> dict:
         normalized = (question or "").strip()
         if not normalized:
@@ -781,6 +1001,76 @@ class RAGNodes:
         self.logger.info("=" * 50)
         self.logger.info("[RAG Graph] 节点: START - 开始处理")
 
+        return state
+
+    def structured_medical_parse_node(self, state: RAGGraphState, runtime: Runtime[RAGContext]) -> RAGGraphState:
+        self.logger.info("=" * 50)
+        self.logger.info("[RAG Graph] 节点: STRUCTURED_MEDICAL_PARSE - 结构化医疗解析")
+        question = self._extract_latest_message(state)
+        state["original_question"] = question
+        patient_profile = self._extract_patient_profile_snapshot(state)
+        state["patient_profile_snapshot"] = patient_profile
+        fallback_output = self._build_medical_structured_fallback(question, patient_profile)
+        if not self.medical_sop_enabled:
+            state["medical_structured_output"] = fallback_output
+            state["extracted_symptoms"] = fallback_output.get("symptoms", [])
+            state["extracted_vitals"] = fallback_output.get("vitals", {})
+            state["structured_decision_valid"] = False
+            state["structured_decision_error"] = "medical_sop_disabled"
+            return state
+
+        structured_output = fallback_output
+        error_message = ""
+        try:
+            if self.llm and hasattr(self.llm, "with_structured_output"):
+                prompt = RAGGraphPrompts.get_medical_sop_prompt().format(
+                    question=question,
+                    patient_profile=json.dumps(patient_profile, ensure_ascii=False)
+                )
+                structured_llm = self.llm.with_structured_output(MedicalStructuredDecision)
+                decision = structured_llm.invoke(prompt)
+                payload = decision.model_dump() if hasattr(decision, "model_dump") else dict(decision)
+                structured_output = self._normalize_medical_structured_output(payload, fallback_output)
+            else:
+                structured_output = fallback_output
+                error_message = "llm_not_available"
+        except Exception as exc:
+            structured_output = fallback_output
+            error_message = str(exc)
+            self.logger.warning(f"结构化医疗解析失败，已降级到规则兜底: {exc}")
+
+        state["medical_structured_output"] = structured_output
+        state["extracted_symptoms"] = structured_output.get("symptoms", [])
+        state["extracted_vitals"] = structured_output.get("vitals", {})
+        state["structured_decision_valid"] = not bool(error_message)
+        state["structured_decision_error"] = error_message
+        return state
+
+    def medical_redline_guard_node(self, state: RAGGraphState, runtime: Runtime[RAGContext]) -> RAGGraphState:
+        self.logger.info("=" * 50)
+        self.logger.info("[RAG Graph] 节点: MEDICAL_REDLINE_GUARD - 医疗红线检查")
+        question = state.get("original_question") or self._extract_latest_message(state)
+        structured_output = state.get("medical_structured_output", {}) or {}
+        red_flags = set(str(item).strip() for item in (structured_output.get("red_flags") or []) if str(item).strip())
+        lower_question = str(question or "").lower()
+        for marker in self.medical_emergency_markers:
+            if marker.lower() in lower_question:
+                red_flags.add(marker)
+        triage_level = self._normalize_triage_level(structured_output.get("triage_level") or "")
+        handoff_required = bool(structured_output.get("handoff_required")) or bool(red_flags)
+        handoff_reason = str(structured_output.get("handoff_reason") or "").strip()
+        if handoff_required and not handoff_reason:
+            handoff_reason = "命中医疗红线规则"
+        if not handoff_required and triage_level == "unknown" and self.medical_sop_force_handoff_when_uncertain and self._is_medical_text(question):
+            handoff_required = True
+            triage_level = "urgent"
+            handoff_reason = "医疗信息不充分，触发保守转人工"
+        if handoff_required and triage_level not in {"emergency", "urgent"}:
+            triage_level = "emergency" if red_flags else "urgent"
+        state["medical_red_flags"] = sorted(red_flags)
+        state["triage_level"] = triage_level
+        state["handoff_required"] = handoff_required
+        state["handoff_reason"] = handoff_reason
         return state
 
     def _clone_retrieved_docs(self, docs: list[RetrievedDocument]) -> list[RetrievedDocument]:
@@ -1206,6 +1496,10 @@ class RAGNodes:
         state["tool_prefilled_args"] = {}
         state["tool_selection_reason"] = ""
         state["tool_clarify_message"] = ""
+        if bool(state.get("handoff_required", False)):
+            self.logger.info("已触发医疗红线转人工，跳过工具门控")
+            self._clear_pending_tool_state(state)
+            return state
         if not self.tools:
             return state
 
@@ -1492,6 +1786,17 @@ class RAGNodes:
         """
         self.logger.info("=" * 50)
         self.logger.info("[RAG Graph] 节点: CHECK_RETRIEVAL_NEEDED - 判断是否需要检索")
+
+        if bool(state.get("handoff_required", False)):
+            self.logger.info("已触发医疗红线转人工，跳过检索")
+            state["need_retrieval"] = False
+            state["need_retrieval_reason"] = "医疗红线触发转人工，检索链路已短路"
+            state["retrieval_decision_stats"] = {
+                "stage": "medical_handoff",
+                "reason": state["need_retrieval_reason"],
+                "decision_path": ["medical_redline_handoff"]
+            }
+            return state
         
         retrieval_mode = state['retrieval_mode']
         latest_message = self._extract_latest_message(state)
@@ -2423,6 +2728,54 @@ class RAGNodes:
 
 
 
+    def generate_intervention_plan_node(self, state: RAGGraphState, runtime: Runtime[RAGContext]) -> RAGGraphState:
+        self.logger.info("=" * 50)
+        self.logger.info("[RAG Graph] 节点: GENERATE_INTERVENTION_PLAN - 生成个性化干预草案")
+
+        question = state.get("original_question") or self._extract_latest_message(state)
+        structured_output = state.get("medical_structured_output", {}) or {}
+        retrieved_docs = state.get("retrieved_docs", []) or []
+
+        if bool(state.get("handoff_required", False)):
+            state["intervention_plan"] = {}
+            self.logger.info("已触发转人工，跳过干预草案生成")
+            return state
+
+        fallback_plan = self._build_intervention_plan_fallback(
+            question=question,
+            structured_output=structured_output,
+            retrieved_docs=retrieved_docs
+        )
+
+        if (not self.medical_sop_enabled) or (not self.llm) or (not hasattr(self.llm, "with_structured_output")):
+            state["intervention_plan"] = fallback_plan
+            return state
+
+        doc_lines = []
+        for idx, doc in enumerate(retrieved_docs[:6], start=1):
+            source = (doc.metadata or {}).get("document_name", f"文档{idx}")
+            snippet = (doc.page_content or "").strip()
+            if len(snippet) > 600:
+                snippet = snippet[:600] + "..."
+            doc_lines.append(f"[{idx}] {source}: {snippet}")
+        documents_text = "\n".join(doc_lines) if doc_lines else "暂无可用检索证据。"
+
+        try:
+            prompt = RAGGraphPrompts.get_intervention_plan_prompt().format(
+                question=question,
+                medical_structured_output=json.dumps(structured_output, ensure_ascii=False),
+                documents=documents_text
+            )
+            structured_llm = self.llm.with_structured_output(MedicalInterventionPlan)
+            plan_result = structured_llm.invoke(prompt)
+            payload = plan_result.model_dump() if hasattr(plan_result, "model_dump") else dict(plan_result)
+            state["intervention_plan"] = self._normalize_intervention_plan(payload, fallback_plan)
+        except Exception as exc:
+            self.logger.warning(f"结构化干预草案生成失败，已降级到规则兜底: {exc}")
+            state["intervention_plan"] = fallback_plan
+
+        return state
+
     def generate_answer_node(self, state: RAGGraphState, runtime: Runtime[RAGContext]) -> RAGGraphState:
         """生成答案节点
 
@@ -2440,7 +2793,21 @@ class RAGNodes:
 
         # 获取原始问题
         original_question = state.get("original_question", "")
+        if bool(state.get("handoff_required", False)):
+            handoff_answer = self._build_medical_handoff_answer(
+                question=original_question,
+                red_flags=state.get("medical_red_flags", []) or [],
+                handoff_reason=str(state.get("handoff_reason") or "")
+            )
+            safe_answer = self._apply_medical_safety_notice(original_question, handoff_answer, force_medical=True)
+            state["final_answer"] = safe_answer
+            state["answer_sources"] = []
+            state["messages"] = [AIMessage(content=safe_answer)]
+            self.logger.info("命中医疗红线，已直接返回转人工答复")
+            return state
+
         retrieved_docs = state.get("retrieved_docs", [])
+        intervention_plan = state.get("intervention_plan", {}) or {}
         
         self.logger.info(f"回答问题: {original_question}")
         self.logger.info(f"可用文档数量: {len(retrieved_docs)}")
@@ -2454,6 +2821,10 @@ class RAGNodes:
                     documents_text += f"\n[文档 {i+1} - {source}]:\n{doc.page_content}\n"
             else:
                 documents_text = "暂无检索到的相关文档。"
+
+            intervention_plan_text = self._format_intervention_plan(intervention_plan)
+            if intervention_plan_text:
+                documents_text += f"\n[SOP 干预草案]:\n{intervention_plan_text}\n"
 
             # 获取答案生成提示词
             prompt_template = RAGGraphPrompts.get_answer_generation_prompt()
@@ -2568,6 +2939,18 @@ class RAGNodes:
         latest_message = all_messages[-1]
         user_question = latest_message.content if hasattr(latest_message, "content") else str(latest_message)
         self.logger.info(f"用户问题: {user_question}")
+
+        if bool(state.get("handoff_required", False)):
+            handoff_answer = self._build_medical_handoff_answer(
+                question=user_question,
+                red_flags=state.get("medical_red_flags", []) or [],
+                handoff_reason=str(state.get("handoff_reason") or "")
+            )
+            safe_answer = self._apply_medical_safety_notice(user_question, handoff_answer, force_medical=True)
+            state["final_answer"] = safe_answer
+            state["messages"] = [AIMessage(content=safe_answer)]
+            self.logger.info("命中医疗红线，直接回答节点返回转人工答复")
+            return state
 
         # 构建对话历史
         try:
@@ -2700,6 +3083,15 @@ class RAGNodes:
     """
 
     # ==================== 路由函数 ====================
+
+    def route_medical_guard(self, state: RAGGraphState) -> str:
+        handoff_required = bool(state.get("handoff_required", False))
+        self.logger.info(f"[RAG Graph] 路由检查: handoff_required = {handoff_required}")
+        if handoff_required:
+            self.logger.info("路由决策: 命中红线 -> handoff")
+            return "handoff"
+        self.logger.info("路由决策: 未命中红线 -> continue")
+        return "continue"
 
     def route_retrieval_needed(self, state: RAGGraphState) -> str:
         """路由：是否需要检索
